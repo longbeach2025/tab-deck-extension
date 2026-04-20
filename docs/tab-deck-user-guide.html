@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <title>Tab Deck 功能说明与使用方法</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 18mm;
+      }
+
+      body {
+        margin: 0;
+        color: #222;
+        font-family: "Songti SC", "STSong", "STHeiti", "PingFang SC", serif;
+        font-size: 12.5pt;
+        line-height: 1.7;
+      }
+
+      h1,
+      h2,
+      h3 {
+        font-family: "STHeiti", "PingFang SC", sans-serif;
+        line-height: 1.3;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 26pt;
+      }
+
+      h2 {
+        margin: 24px 0 8px;
+        font-size: 17pt;
+        border-bottom: 1px solid #d8d8d8;
+        padding-bottom: 5px;
+      }
+
+      h3 {
+        margin: 18px 0 6px;
+        font-size: 13.5pt;
+      }
+
+      p {
+        margin: 6px 0;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 8px 24px;
+        padding: 0;
+      }
+
+      li {
+        margin: 3px 0;
+      }
+
+      code,
+      pre {
+        font-family: Menlo, Consolas, monospace;
+      }
+
+      pre {
+        margin: 10px 0;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        background: #f6f6f6;
+        white-space: pre-wrap;
+      }
+
+      .meta {
+        margin-bottom: 22px;
+        color: #666;
+      }
+
+      .callout {
+        margin: 12px 0;
+        padding: 10px 12px;
+        border-left: 4px solid #1f6f5b;
+        background: #f3faf7;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tab Deck 功能说明与使用方法</h1>
+    <p class="meta">项目地址：https://github.com/longbeach2025/tab-deck-extension</p>
+
+    <h2>Tab Deck 是什么</h2>
+    <p>
+      Tab Deck 是一个 Chrome 标签页管理插件，用来替代 Toby 这类工具。它会把 Chrome 新标签页变成一个“标签工作台”，你可以把当前打开的网页保存成集合，在多设备之间同步，再按项目、主题或工作场景恢复。
+    </p>
+
+    <h2>核心功能</h2>
+
+    <h3>1. 新标签页工作台</h3>
+    <p>安装后，Chrome 的新标签页会变成 Tab Deck 主界面。</p>
+    <p>左侧包括：</p>
+    <ul>
+      <li>搜索框</li>
+      <li>Spaces 空间列表</li>
+      <li>当前窗口打开的标签页</li>
+      <li>保存选中标签页</li>
+      <li>保存全部标签页</li>
+      <li>保存后关闭原标签页选项</li>
+    </ul>
+    <p>右侧包括：</p>
+    <ul>
+      <li>当前 Space 的所有 Collections</li>
+      <li>每个 Collection 里的已保存链接</li>
+      <li>Collection 笔记</li>
+      <li>手动添加链接</li>
+      <li>一键打开整个 Collection</li>
+    </ul>
+
+    <h3>2. Space 空间</h3>
+    <p>Space 是最高层级分类，可以理解为“大工作区”。例如：</p>
+    <ul>
+      <li>Work</li>
+      <li>Trading</li>
+      <li>Research</li>
+      <li>Personal</li>
+      <li>Client A</li>
+      <li>Client B</li>
+    </ul>
+    <p>每个 Space 下面可以有多个 Collection。当前支持新建、切换、重命名和删除 Space。</p>
+
+    <h3>3. Collection 集合</h3>
+    <p>Collection 是一组标签页或链接，可以理解为“一次工作会话”或“一个主题文件夹”。例如：</p>
+    <ul>
+      <li>2026 Budget Review</li>
+      <li>AI Research</li>
+      <li>Chrome Extension Dev</li>
+      <li>Morning Reading</li>
+      <li>Supplier Docs</li>
+    </ul>
+    <p>每个 Collection 支持保存多个标签页、添加笔记、手动添加链接、删除单个链接、删除整个 Collection，以及一键打开全部链接。</p>
+
+    <h3>4. 保存当前标签页</h3>
+    <p>点击浏览器右上角的 Tab Deck 插件图标，会打开 popup。在 popup 里可以：</p>
+    <ul>
+      <li>选择 Space</li>
+      <li>选择已有 Collection</li>
+      <li>或输入一个新 Collection 名称</li>
+      <li>保存当前标签页</li>
+      <li>保存当前窗口所有标签页</li>
+      <li>选择保存后是否关闭原标签页</li>
+    </ul>
+    <p>这个入口适合快速整理当前浏览状态。</p>
+
+    <h3>5. 保存当前窗口</h3>
+    <p>在主工作台左侧，可以看到当前窗口所有可保存的标签页。你可以：</p>
+    <ul>
+      <li>勾选部分标签页，然后点击 Save selected</li>
+      <li>直接点击 Save all</li>
+      <li>勾选 Close after save，保存后自动关闭这些标签页</li>
+    </ul>
+    <p>这适合把一堆打开的网页收纳起来，清空浏览器窗口。</p>
+
+    <h3>6. 拖拽保存</h3>
+    <p>主界面左侧的当前标签页可以直接拖到右侧某个 Collection 里。这个方式适合你边整理边归类，不用每次弹窗输入。</p>
+
+    <h3>7. 搜索</h3>
+    <p>顶部搜索框可以搜索：</p>
+    <ul>
+      <li>链接标题</li>
+      <li>URL</li>
+      <li>域名</li>
+      <li>Collection 名称</li>
+      <li>Collection 笔记</li>
+    </ul>
+    <p>保存很多链接后，可以用搜索快速找回。</p>
+
+    <h3>8. 多设备同步</h3>
+    <p>当前版本已经支持 Chrome 账号同步。</p>
+    <ul>
+      <li>默认保存到 chrome.storage.sync</li>
+      <li>多台设备登录同一个 Chrome 账号后自动同步</li>
+      <li>同时保留一份 chrome.storage.local 本地副本</li>
+      <li>如果同步失败或数据超过限制，会退回本地保存，并显示 Local fallback</li>
+    </ul>
+    <div class="callout">
+      注意：Chrome sync 适合个人多设备轻量使用，不适合无限量存储。大概几百个链接以内比较合适。
+    </div>
+
+    <h2>安装方法</h2>
+    <ol>
+      <li>打开 GitHub 仓库：https://github.com/longbeach2025/tab-deck-extension</li>
+      <li>克隆或下载代码到本地。</li>
+      <li>打开 Chrome：chrome://extensions</li>
+      <li>打开右上角 Developer mode。</li>
+      <li>点击 Load unpacked。</li>
+      <li>选择本地目录：/Users/reclina/tab-deck-extension</li>
+      <li>安装后打开一个新标签页，就会进入 Tab Deck 主界面。</li>
+    </ol>
+
+    <h2>推荐使用方式</h2>
+    <p>可以按这个结构管理：</p>
+    <pre>Space: Work
+  Collection: Finance Budget
+  Collection: Chrome Extension Dev
+  Collection: Vendor Research
+
+Space: Personal
+  Collection: Reading List
+  Collection: Travel
+  Collection: Shopping
+
+Space: Trading
+  Collection: Market Dashboards
+  Collection: Research Reports</pre>
+
+    <p>日常流程：</p>
+    <ol>
+      <li>工作时先正常打开网页。</li>
+      <li>准备切换任务时，打开 Tab Deck。</li>
+      <li>选择当前窗口的标签页。</li>
+      <li>保存到某个 Collection。</li>
+      <li>勾选 Close after save 清空窗口。</li>
+      <li>下次继续时，找到 Collection，点击打开全部链接。</li>
+    </ol>
+
+    <h2>当前还没做的功能</h2>
+    <ul>
+      <li>导入 / 导出 JSON</li>
+      <li>导出 Markdown</li>
+      <li>快捷键</li>
+      <li>Collection 手动排序</li>
+      <li>Space / Collection 图标</li>
+      <li>批量移动链接</li>
+      <li>标签去重增强</li>
+      <li>自有后端同步</li>
+      <li>团队共享</li>
+      <li>登录系统</li>
+      <li>历史版本恢复</li>
+      <li>Chrome Web Store 发布打包</li>
+    </ul>
+
+    <p>当前版本已经是一个能实际使用的个人多设备标签管理 MVP。</p>
+  </body>
+</html>
