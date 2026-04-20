@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Deck",
+  "description": "Synced tab sessions, spaces, collections, notes, and quick restore.",
+  "version": "0.1.0",
+  "permissions": ["storage", "tabs"],
+  "action": {
+    "default_title": "Tab Deck",
+    "default_popup": "popup.html"
+  },
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  }
+}

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tab Deck</title>
+    <link rel="stylesheet" href="src/styles.css">
+  </head>
+  <body class="popup-shell">
+    <header class="popup-header">
+      <div class="brand-mark" aria-hidden="true">TD</div>
+      <div>
+        <h1>Tab Deck</h1>
+        <p id="popupStatus">Ready</p>
+      </div>
+    </header>
+
+    <label class="field-label" for="spaceSelect">Space</label>
+    <select id="spaceSelect"></select>
+
+    <label class="field-label" for="collectionSelect">Collection</label>
+    <select id="collectionSelect"></select>
+
+    <label class="field-label" for="collectionName">Or create collection</label>
+    <input id="collectionName" type="text" placeholder="Research, Finance, Reading">
+
+    <label class="check-row">
+      <input id="popupCloseAfterSave" type="checkbox">
+      <span>Close saved tabs</span>
+    </label>
+
+    <div class="popup-actions">
+      <button id="saveTabButton" class="secondary-button">Save tab</button>
+      <button id="saveWindowButton" class="primary-button">Save window</button>
+    </div>
+
+    <button id="openDeckButton" class="ghost-button">Open workspace</button>
+
+    <script type="module" src="src/popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tab Deck</title>
+    <link rel="stylesheet" href="src/styles.css">
+  </head>
+  <body class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true">TD</div>
+        <div>
+          <h1>Tab Deck</h1>
+          <p id="deckStats">Loading</p>
+        </div>
+      </div>
+
+      <div class="search-wrap">
+        <span class="search-icon" aria-hidden="true"></span>
+        <input id="searchInput" type="search" placeholder="Search tabs, links, notes">
+      </div>
+
+      <div class="side-section">
+        <div class="section-title">
+          <span>Spaces</span>
+          <button id="addSpaceButton" class="icon-button" title="Create space" aria-label="Create space">+</button>
+        </div>
+        <div id="spaceList" class="space-list"></div>
+      </div>
+
+      <div class="side-section current-tabs-section">
+        <div class="section-title">
+          <span>Current Window</span>
+          <button id="refreshTabsButton" class="icon-button" title="Refresh tabs" aria-label="Refresh tabs">R</button>
+        </div>
+        <div class="quick-actions">
+          <button id="saveSelectedButton" class="primary-button">Save selected</button>
+          <button id="saveAllButton" class="secondary-button">Save all</button>
+        </div>
+        <label class="check-row close-row">
+          <input id="closeAfterSave" type="checkbox">
+          <span>Close after save</span>
+        </label>
+        <div id="liveTabs" class="live-tabs"></div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div>
+          <p id="activeSpaceMeta" class="eyebrow">Local workspace</p>
+          <h2 id="activeSpaceName">Space</h2>
+        </div>
+        <div class="header-actions">
+          <button id="renameSpaceButton" class="secondary-button">Rename</button>
+          <button id="deleteSpaceButton" class="secondary-button danger">Delete</button>
+          <button id="newCollectionButton" class="primary-button">New collection</button>
+        </div>
+      </header>
+
+      <section id="emptyState" class="empty-state hidden">
+        <h3>No collections yet</h3>
+        <p>Save the current window or create a collection to start building this space.</p>
+        <button id="emptyCreateButton" class="primary-button">Create collection</button>
+      </section>
+
+      <section id="collectionGrid" class="collection-grid" aria-live="polite"></section>
+    </main>
+
+    <template id="collectionTemplate">
+      <article class="collection-card">
+        <div class="collection-top">
+          <input class="collection-name" type="text">
+          <div class="collection-actions">
+            <button class="icon-button open-all" title="Open all links" aria-label="Open all links">O</button>
+            <button class="icon-button delete-collection" title="Delete collection" aria-label="Delete collection">D</button>
+          </div>
+        </div>
+        <textarea class="collection-notes" rows="2" placeholder="Notes"></textarea>
+        <form class="add-link-form">
+          <input class="link-title-input" type="text" placeholder="Title">
+          <input class="link-url-input" type="url" placeholder="https://example.com">
+          <button class="icon-button" title="Add link" aria-label="Add link">+</button>
+        </form>
+        <div class="drop-zone">Drop a current tab here</div>
+        <div class="link-list"></div>
+      </article>
+    </template>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>
