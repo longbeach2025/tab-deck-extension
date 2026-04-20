@@ -1,3 +1,12 @@
+import {
+  fetchCloudDeck,
+  isCloudConfigured,
+  isCloudReady,
+  pushDeckToCloud,
+  queuePendingCloudDeck,
+  syncPendingCloudDeck
+} from "./cloud.js";
+
 const STORAGE_KEY = "tabDeckData";
 const SYNC_META_KEY = "tabDeckSyncMeta";
 const SYNC_CHUNK_PREFIX = "tabDeckSyncChunk_";
@@ -94,6 +103,12 @@ function normalizeDeck(deck) {
 }
 
 export async function loadDeck() {
+  const cloudDeck = await loadCloudDeck();
+
+  if (cloudDeck) {
+    return cloudDeck;
+  }
+
   const [localDeck, syncDeck] = await Promise.all([readLocalDeck(), readSyncDeck()]);
 
   if (localDeck && syncDeck) {
@@ -134,6 +149,38 @@ export async function saveDeck(deck) {
   });
 
   await writeLocalDeck(normalized);
+
+  if (await isCloudConfigured()) {
+    try {
+      if (!(await isCloudReady())) {
+        await queuePendingCloudDeck(normalized);
+        lastStorageStatus = {
+          mode: "cloud",
+          synced: false,
+          message: "Supabase configured; sign in to sync. Saved locally."
+        };
+        return lastStorageStatus;
+      }
+
+      await pushDeckToCloud(normalized);
+      lastStorageStatus = {
+        mode: "cloud",
+        synced: true,
+        message: "Supabase cloud sync is active."
+      };
+      return lastStorageStatus;
+    } catch (error) {
+      await queuePendingCloudDeck(normalized);
+      const reason = error instanceof Error ? error.message : String(error);
+      lastStorageStatus = {
+        mode: "cloud",
+        synced: false,
+        message: `Cloud sync failed; saved locally. ${reason}`
+      };
+      console.warn("[Tab Deck] Cloud sync failed; data was saved locally.", error);
+      return lastStorageStatus;
+    }
+  }
 
   try {
     await writeSyncDeck(normalized);
@@ -257,6 +304,77 @@ export function isDeckStorageChange(areaName, changes) {
   }
 
   return Object.keys(changes).some((key) => key === SYNC_META_KEY || key.startsWith(SYNC_CHUNK_PREFIX));
+}
+
+export async function refreshDeckFromCloud() {
+  const cloudDeck = await loadCloudDeck({ forceCloud: true });
+  return cloudDeck || loadDeck();
+}
+
+async function loadCloudDeck(options = {}) {
+  if (!(await isCloudConfigured())) {
+    return null;
+  }
+
+  if (!(await isCloudReady())) {
+    lastStorageStatus = {
+      mode: "cloud",
+      synced: false,
+      message: "Supabase configured; sign in to sync."
+    };
+    return null;
+  }
+
+  try {
+    await syncPendingCloudDeck();
+    const [localDeck, remoteDeck] = await Promise.all([readLocalDeck(), fetchCloudDeck()]);
+
+    if (remoteDeck && localDeck && !options.forceCloud) {
+      const localUpdatedAt = Date.parse(localDeck.updatedAt || "");
+      const remoteUpdatedAt = Date.parse(remoteDeck.updatedAt || "");
+
+      if (localUpdatedAt > remoteUpdatedAt + 1000) {
+        await pushDeckToCloud(localDeck);
+        setCloudStatus("Supabase cloud sync is active.");
+        return normalizeDeck(localDeck);
+      }
+    }
+
+    if (remoteDeck) {
+      await writeLocalDeck(remoteDeck);
+      setCloudStatus("Supabase cloud sync is active.");
+      return normalizeDeck(remoteDeck);
+    }
+
+    if (localDeck) {
+      await pushDeckToCloud(localDeck);
+      setCloudStatus("Migrated local deck to Supabase.");
+      return normalizeDeck(localDeck);
+    }
+
+    const deck = defaultDeck();
+    await writeLocalDeck(deck);
+    await pushDeckToCloud(deck);
+    setCloudStatus("Supabase cloud sync is active.");
+    return normalizeDeck(deck);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    lastStorageStatus = {
+      mode: "cloud",
+      synced: false,
+      message: `Cloud sync unavailable; using local data. ${reason}`
+    };
+    console.warn("[Tab Deck] Cloud sync unavailable.", error);
+    return null;
+  }
+}
+
+function setCloudStatus(message) {
+  lastStorageStatus = {
+    mode: "cloud",
+    synced: true,
+    message
+  };
 }
 
 export function getActiveSpace(deck) {

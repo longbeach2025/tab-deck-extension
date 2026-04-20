@@ -242,6 +242,40 @@ textarea {
   margin-bottom: 10px;
 }
 
+.cloud-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 12px;
+}
+
+.cloud-status {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cloud-status.warning {
+  color: var(--danger);
+}
+
+.cloud-fields {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cloud-fields .quick-actions {
+  margin-bottom: 0;
+}
+
+.cloud-fields .quick-actions button,
+.cloud-fields .ghost-button,
+.cloud-fields .secondary-button {
+  width: 100%;
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button,

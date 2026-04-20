@@ -1,0 +1,17 @@
+{
+  "name": "tab-deck-extension",
+  "version": "0.2.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "package": "./scripts/package_release.sh",
+    "check": "node --check src/storage.js && node --check src/cloud.js && node --check src/app.js && node --check src/popup.js && python3 -m json.tool manifest.json"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.87.0"
+  },
+  "devDependencies": {
+    "vite": "^7.3.0"
+  }
+}

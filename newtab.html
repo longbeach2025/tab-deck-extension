@@ -21,6 +21,28 @@
         <input id="searchInput" type="search" placeholder="Search tabs, links, notes">
       </div>
 
+      <div class="side-section cloud-section">
+        <div class="section-title">
+          <span>Cloud Sync</span>
+          <button id="syncNowButton" class="icon-button" title="Sync now" aria-label="Sync now">S</button>
+        </div>
+        <p id="cloudStatus" class="cloud-status">Checking cloud status</p>
+        <div class="cloud-fields">
+          <input id="cloudUrlInput" type="url" placeholder="Supabase project URL">
+          <input id="cloudAnonKeyInput" type="password" placeholder="Supabase anon key">
+          <button id="saveCloudConfigButton" class="secondary-button">Save config</button>
+        </div>
+        <div class="cloud-fields">
+          <input id="cloudEmailInput" type="email" placeholder="Email">
+          <input id="cloudPasswordInput" type="password" placeholder="Password">
+          <div class="quick-actions">
+            <button id="signInCloudButton" class="primary-button">Sign in</button>
+            <button id="signUpCloudButton" class="secondary-button">Sign up</button>
+          </div>
+          <button id="signOutCloudButton" class="ghost-button">Sign out</button>
+        </div>
+      </div>
+
       <div class="side-section">
         <div class="section-title">
           <span>Spaces</span>

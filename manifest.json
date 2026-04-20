@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Tab Deck",
-  "description": "Synced tab sessions, spaces, collections, notes, and quick restore.",
-  "version": "0.1.0",
+  "description": "Cloud-synced tab sessions, spaces, collections, notes, and quick restore.",
+  "version": "0.2.0",
   "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://*.supabase.co/*"],
   "action": {
     "default_title": "Tab Deck",
     "default_popup": "popup.html"

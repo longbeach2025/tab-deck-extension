@@ -8,9 +8,18 @@ import {
   isDeckStorageChange,
   loadDeck,
   makeId,
+  refreshDeckFromCloud,
   saveDeck,
   tabToItem
 } from "./storage.js";
+import {
+  getCloudConfig,
+  getCloudUser,
+  saveCloudConfig,
+  signInCloud,
+  signOutCloud,
+  signUpCloud
+} from "./cloud.js";
 
 let deck;
 let liveTabs = [];
@@ -19,6 +28,16 @@ let query = "";
 
 const elements = {
   deckStats: document.querySelector("#deckStats"),
+  cloudStatus: document.querySelector("#cloudStatus"),
+  cloudUrlInput: document.querySelector("#cloudUrlInput"),
+  cloudAnonKeyInput: document.querySelector("#cloudAnonKeyInput"),
+  cloudEmailInput: document.querySelector("#cloudEmailInput"),
+  cloudPasswordInput: document.querySelector("#cloudPasswordInput"),
+  saveCloudConfigButton: document.querySelector("#saveCloudConfigButton"),
+  signInCloudButton: document.querySelector("#signInCloudButton"),
+  signUpCloudButton: document.querySelector("#signUpCloudButton"),
+  signOutCloudButton: document.querySelector("#signOutCloudButton"),
+  syncNowButton: document.querySelector("#syncNowButton"),
   searchInput: document.querySelector("#searchInput"),
   spaceList: document.querySelector("#spaceList"),
   addSpaceButton: document.querySelector("#addSpaceButton"),
@@ -46,6 +65,7 @@ async function init() {
   bindEvents();
   bindStorageSyncEvents();
   render();
+  await renderCloudControls();
 }
 
 function bindEvents() {
@@ -62,6 +82,11 @@ function bindEvents() {
   elements.emptyCreateButton.addEventListener("click", addCollection);
   elements.renameSpaceButton.addEventListener("click", renameActiveSpace);
   elements.deleteSpaceButton.addEventListener("click", deleteActiveSpace);
+  elements.saveCloudConfigButton.addEventListener("click", saveCloudSettings);
+  elements.signInCloudButton.addEventListener("click", signInToCloud);
+  elements.signUpCloudButton.addEventListener("click", signUpForCloud);
+  elements.signOutCloudButton.addEventListener("click", signOutOfCloud);
+  elements.syncNowButton.addEventListener("click", syncNow);
 }
 
 function bindStorageSyncEvents() {
@@ -101,9 +126,25 @@ function render() {
 
 function renderStats() {
   const status = getStorageStatus();
-  const syncLabel = status.synced ? "Chrome sync on" : "Local fallback";
+  const syncLabel =
+    status.mode === "cloud" ? (status.synced ? "Supabase sync on" : "Cloud pending") : status.synced ? "Chrome sync on" : "Local fallback";
   elements.deckStats.textContent = `${deck.spaces.length} spaces, ${countItems(deck)} saved links · ${syncLabel}`;
   elements.deckStats.title = status.message;
+
+  if (elements.cloudStatus) {
+    elements.cloudStatus.textContent = status.message;
+    elements.cloudStatus.classList.toggle("warning", !status.synced);
+  }
+}
+
+async function renderCloudControls() {
+  const config = await getCloudConfig();
+  const user = await getCloudUser().catch(() => null);
+  elements.cloudUrlInput.value = config.supabaseUrl;
+  elements.cloudAnonKeyInput.value = config.anonKey;
+  elements.cloudStatus.textContent = user ? `Signed in as ${user.email || user.id}` : getStorageStatus().message;
+  elements.signOutCloudButton.disabled = !user;
+  elements.syncNowButton.disabled = !user;
 }
 
 function renderSpaces() {
@@ -505,6 +546,72 @@ async function openCollection(collection) {
 async function persistAndRender() {
   await saveDeck(deck);
   render();
+}
+
+async function saveCloudSettings() {
+  await saveCloudConfig({
+    supabaseUrl: elements.cloudUrlInput.value,
+    anonKey: elements.cloudAnonKeyInput.value
+  });
+  elements.cloudStatus.textContent = "Supabase config saved. Sign in to sync.";
+  renderStats();
+}
+
+async function signInToCloud() {
+  await runCloudAction(async () => {
+    await signInCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value);
+    deck = await refreshDeckFromCloud();
+    elements.cloudPasswordInput.value = "";
+  });
+}
+
+async function signUpForCloud() {
+  await runCloudAction(async () => {
+    await signUpCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value);
+    deck = await refreshDeckFromCloud();
+    elements.cloudPasswordInput.value = "";
+  });
+}
+
+async function signOutOfCloud() {
+  await runCloudAction(async () => {
+    await signOutCloud();
+  });
+}
+
+async function syncNow() {
+  await runCloudAction(async () => {
+    deck = await refreshDeckFromCloud();
+  });
+}
+
+async function runCloudAction(action) {
+  setCloudBusy(true);
+
+  try {
+    await action();
+    render();
+    await renderCloudControls();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    elements.cloudStatus.textContent = message;
+    elements.cloudStatus.classList.add("warning");
+  } finally {
+    setCloudBusy(false);
+    await renderCloudControls();
+  }
+}
+
+function setCloudBusy(isBusy) {
+  for (const button of [
+    elements.saveCloudConfigButton,
+    elements.signInCloudButton,
+    elements.signUpCloudButton,
+    elements.signOutCloudButton,
+    elements.syncNowButton
+  ]) {
+    button.disabled = isBusy;
+  }
 }
 
 function normalizeUrl(rawUrl) {

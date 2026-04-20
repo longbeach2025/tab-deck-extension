@@ -1,8 +1,12 @@
 # Tab Deck
 
-Current version: `0.1.0`
+Current stable version: `0.1.0`
+
+Current development version: `0.2.0-alpha.0`
 
 [Download v0.1.0 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
+
+[Download v0.2.0-alpha.0 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.0/tab-deck-extension-v0.2.0-alpha.0.zip)
 
 Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tools like Toby, but implemented from scratch without Toby branding, assets, or proprietary behavior.
 
@@ -29,20 +33,37 @@ Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tool
 
 ## Install From Release ZIP
 
-1. Download [`tab-deck-extension-v0.1.0.zip`](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip).
+1. Download [`tab-deck-extension-v0.1.0.zip`](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip), or a newer alpha release if you want Supabase cloud sync.
 2. Unzip it.
 3. Open `chrome://extensions`.
 4. Enable Developer mode.
 5. Click Load unpacked.
-6. Select the unzipped `tab-deck-extension-v0.1.0` folder, not the zip file itself.
+6. Select the unzipped extension folder, not the zip file itself.
 
 Chrome does not allow true one-click installation from a random GitHub zip. A one-click install flow requires publishing the extension to the Chrome Web Store.
+
+## Supabase Cloud Sync
+
+`v0.2.0-alpha.0` adds Supabase-backed sync while keeping the `v0.1.0` Chrome sync release available.
+
+Setup:
+
+1. Create a Supabase project.
+2. Open the Supabase SQL Editor.
+3. Run `supabase/schema.sql`.
+4. In Supabase project settings, copy the Project URL and anon public key.
+5. Install the `v0.2.0-alpha.0` extension package.
+6. Open a new tab and paste the Project URL and anon key in Cloud Sync.
+7. Sign up or sign in with email and password.
+
+The extension stores Spaces, Collections, Links, and Notes in Supabase PostgreSQL with Row Level Security policies that limit each user to their own rows. Chrome local storage is still used as a local cache and offline fallback.
 
 ## Build Release ZIP
 
 Run:
 
 ```bash
+npm install
 ./scripts/package_release.sh
 ```
 
