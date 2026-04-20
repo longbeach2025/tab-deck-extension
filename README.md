@@ -2,6 +2,8 @@
 
 Current version: `0.1.0`
 
+[Download v0.1.0 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
+
 Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tools like Toby, but implemented from scratch without Toby branding, assets, or proprietary behavior.
 
 ## Current MVP
@@ -27,7 +29,7 @@ Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tool
 
 ## Install From Release ZIP
 
-1. Download `tab-deck-extension-v0.1.0.zip` from the GitHub Releases page.
+1. Download [`tab-deck-extension-v0.1.0.zip`](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip).
 2. Unzip it.
 3. Open `chrome://extensions`.
 4. Enable Developer mode.
