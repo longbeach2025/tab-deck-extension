@@ -1,5 +1,7 @@
 # Tab Deck
 
+Current version: `0.1.0`
+
 Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tools like Toby, but implemented from scratch without Toby branding, assets, or proprietary behavior.
 
 ## Current MVP
@@ -22,6 +24,27 @@ Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tool
 3. Click Load unpacked.
 4. Select this folder: `/Users/reclina/tab-deck-extension`.
 5. Open a new tab or pin the extension for quick saves.
+
+## Install From Release ZIP
+
+1. Download `tab-deck-extension-v0.1.0.zip` from the GitHub Releases page.
+2. Unzip it.
+3. Open `chrome://extensions`.
+4. Enable Developer mode.
+5. Click Load unpacked.
+6. Select the unzipped `tab-deck-extension-v0.1.0` folder, not the zip file itself.
+
+Chrome does not allow true one-click installation from a random GitHub zip. A one-click install flow requires publishing the extension to the Chrome Web Store.
+
+## Build Release ZIP
+
+Run:
+
+```bash
+./scripts/package_release.sh
+```
+
+The package will be created under `dist/`.
 
 ## Sync Notes
 
