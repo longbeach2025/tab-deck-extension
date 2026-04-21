@@ -51,9 +51,9 @@ Setup:
 1. Create a Supabase project.
 2. Open the Supabase SQL Editor.
 3. Run `supabase/schema.sql`.
-4. In Supabase project settings, copy the Project URL and anon public key.
+4. In Supabase project settings, copy the Project URL and publishable key. In older Supabase projects this may be labeled as the anon public key.
 5. Install the `v0.2.0-alpha.1` extension package.
-6. Open a new tab and paste the Project URL and anon key in Cloud Sync.
+6. Open a new tab and paste the Project URL and publishable / anon key in Cloud Sync.
 7. Sign up or sign in with email and password.
 
 If your Supabase project requires email confirmation, signing up creates the account but does not start syncing until the email is confirmed. Confirm the email first, then use Sign in.
