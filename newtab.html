@@ -30,6 +30,10 @@
           <button id="syncNowButton" class="icon-button" title="Sync now" aria-label="Sync now">S</button>
         </div>
         <p id="cloudStatus" class="cloud-status">Checking cloud status</p>
+        <p id="cloudSignedIn" class="cloud-meta">Signed in as: Not signed in</p>
+        <p id="cloudLastSynced" class="cloud-meta">Last synced: Never</p>
+        <p id="cloudPending" class="cloud-meta">Pending local changes: No</p>
+        <p id="cloudErrorDetails" class="cloud-meta warning hidden">Cloud error details: None</p>
         <div class="cloud-fields">
           <input id="cloudUrlInput" type="url" placeholder="Supabase project URL">
           <input id="cloudAnonKeyInput" type="password" placeholder="Supabase publishable / anon key">
@@ -44,6 +48,17 @@
           </div>
           <button id="signOutCloudButton" class="ghost-button">Sign out</button>
         </div>
+      </div>
+
+      <div class="side-section">
+        <div class="section-title">
+          <span>Data</span>
+        </div>
+        <div class="quick-actions">
+          <button id="exportDeckButton" class="secondary-button">Export JSON</button>
+          <button id="importDeckButton" class="secondary-button">Import JSON</button>
+        </div>
+        <input id="importDeckInput" type="file" accept="application/json,.json" hidden>
       </div>
 
       <div class="side-section">

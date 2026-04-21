@@ -268,7 +268,17 @@ textarea {
   line-height: 1.4;
 }
 
+.cloud-meta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .cloud-status.warning {
+  color: var(--danger);
+}
+
+.cloud-meta.warning {
   color: var(--danger);
 }
 
@@ -354,6 +364,10 @@ textarea {
 
 .close-row {
   margin-bottom: 12px;
+}
+
+.hidden {
+  display: none !important;
 }
 
 .live-tab,
@@ -498,10 +512,6 @@ textarea {
   justify-items: start;
   gap: 12px;
   max-width: 520px;
-}
-
-.hidden {
-  display: none;
 }
 
 .compact {

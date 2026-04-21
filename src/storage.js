@@ -14,11 +14,15 @@ const SYNC_CHUNK_PREFIX = "tabDeckSyncChunk_";
 const SYNC_CHUNK_SIZE = 7000;
 const SYNC_SOFT_LIMIT_BYTES = 90000;
 
-let lastStorageStatus = {
+const DEFAULT_STATUS = {
   mode: "sync",
   synced: true,
-  message: "Chrome sync is active."
+  message: "Chrome sync is active.",
+  lastSyncedAt: null,
+  pendingLocalChanges: false,
+  lastError: ""
 };
+let lastStorageStatus = { ...DEFAULT_STATUS };
 
 export function makeId(prefix = "id") {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -156,27 +160,36 @@ export async function saveDeck(deck) {
       if (!(await isCloudReady())) {
         await queuePendingCloudDeck(normalized);
         lastStorageStatus = {
+          ...lastStorageStatus,
           mode: "cloud",
           synced: false,
-          message: "Supabase configured; sign in to sync. Saved locally."
+          message: "Supabase configured; sign in to sync. Saved locally.",
+          pendingLocalChanges: true
         };
         return lastStorageStatus;
       }
 
       await pushDeckToCloud(normalized);
       lastStorageStatus = {
+        ...lastStorageStatus,
         mode: "cloud",
         synced: true,
-        message: "Supabase cloud sync is active."
+        message: "Supabase cloud sync is active.",
+        lastSyncedAt: nowIso(),
+        pendingLocalChanges: false,
+        lastError: ""
       };
       return lastStorageStatus;
     } catch (error) {
       await queuePendingCloudDeck(normalized);
       const reason = formatCloudError(error);
       lastStorageStatus = {
+        ...lastStorageStatus,
         mode: "cloud",
         synced: false,
-        message: `Cloud sync failed; saved locally. ${reason}`
+        message: `Cloud sync failed; saved locally. ${reason}`,
+        pendingLocalChanges: true,
+        lastError: reason
       };
       console.warn("[Tab Deck] Cloud sync failed; data was saved locally.", error);
       return lastStorageStatus;
@@ -189,9 +202,12 @@ export async function saveDeck(deck) {
   } catch (error) {
     const reason = formatCloudError(error);
     lastStorageStatus = {
+      ...lastStorageStatus,
       mode: "local",
       synced: false,
-      message: `Sync failed; saved locally. ${reason}`
+      message: `Sync failed; saved locally. ${reason}`,
+      pendingLocalChanges: true,
+      lastError: reason
     };
     console.warn("[Tab Deck] Sync failed; data was saved locally.", error);
   }
@@ -229,9 +245,11 @@ async function readSyncDeck() {
   } catch (error) {
     const reason = formatCloudError(error);
     lastStorageStatus = {
+      ...lastStorageStatus,
       mode: "local",
       synced: false,
-      message: `Could not read Chrome sync; using local data. ${reason}`
+      message: `Could not read Chrome sync; using local data. ${reason}`,
+      lastError: reason
     };
     console.warn("[Tab Deck] Could not read Chrome sync.", error);
     return null;
@@ -289,9 +307,13 @@ function byteLength(value) {
 
 function setSyncStatus(message) {
   lastStorageStatus = {
+    ...lastStorageStatus,
     mode: "sync",
     synced: true,
-    message
+    message,
+    lastSyncedAt: nowIso(),
+    pendingLocalChanges: false,
+    lastError: ""
   };
 }
 
@@ -319,6 +341,7 @@ async function loadCloudDeck() {
 
   if (!(await isCloudReady())) {
     lastStorageStatus = {
+      ...lastStorageStatus,
       mode: "cloud",
       synced: false,
       message: "Supabase configured; sign in to sync."
@@ -376,9 +399,11 @@ async function loadCloudDeck() {
   } catch (error) {
     const reason = formatCloudError(error);
     lastStorageStatus = {
+      ...lastStorageStatus,
       mode: "cloud",
       synced: false,
-      message: `Cloud sync unavailable; using local data. ${reason}`
+      message: `Cloud sync unavailable; using local data. ${reason}`,
+      lastError: reason
     };
     console.warn("[Tab Deck] Cloud sync unavailable.", error);
     return null;
@@ -387,9 +412,13 @@ async function loadCloudDeck() {
 
 function setCloudStatus(message) {
   lastStorageStatus = {
+    ...lastStorageStatus,
     mode: "cloud",
     synced: true,
-    message
+    message,
+    lastSyncedAt: nowIso(),
+    pendingLocalChanges: false,
+    lastError: ""
   };
 }
 
@@ -466,4 +495,24 @@ export function countItems(deck) {
       space.collections.reduce((spaceTotal, collection) => spaceTotal + collection.items.length, 0),
     0
   );
+}
+
+export function serializeDeck(deck) {
+  return JSON.stringify(normalizeDeck(deck), null, 2);
+}
+
+export function parseDeckImport(rawJson) {
+  let parsed;
+
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    throw new Error("Import file is not valid JSON.");
+  }
+
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.spaces)) {
+    throw new Error("Import file does not look like a Tab Deck backup.");
+  }
+
+  return normalizeDeck(parsed);
 }

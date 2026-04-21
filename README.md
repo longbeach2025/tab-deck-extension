@@ -2,11 +2,11 @@
 
 Current stable version: `0.1.0`
 
-Current development version: `0.2.0-alpha.7`
+Current development version: `0.2.0-alpha.8`
 
 [Download v0.1.0 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
 
-[Download v0.2.0-alpha.7 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.7/tab-deck-extension-v0.2.0-alpha.7.zip)
+[Download v0.2.0-alpha.8 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.8/tab-deck-extension-v0.2.0-alpha.8.zip)
 
 Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tools like Toby, but implemented from scratch without Toby branding, assets, or proprietary behavior.
 
@@ -44,7 +44,7 @@ Chrome does not allow true one-click installation from a random GitHub zip. A on
 
 ## Supabase Cloud Sync
 
-`v0.2.0-alpha.7` adds Supabase-backed sync while keeping the `v0.1.0` Chrome sync release available.
+`v0.2.0-alpha.8` adds Supabase-backed sync while keeping the `v0.1.0` Chrome sync release available.
 
 Setup:
 
@@ -52,11 +52,17 @@ Setup:
 2. Open the Supabase SQL Editor.
 3. Run `supabase/schema.sql`.
 4. In Supabase project settings, copy the Project URL and publishable key. In older Supabase projects this may be labeled as the anon public key.
-5. Install the `v0.2.0-alpha.7` extension package.
+5. Install the `v0.2.0-alpha.8` extension package.
 6. Open a new tab and paste the Project URL and publishable / anon key in Cloud Sync.
 7. Sign up or sign in with email and password.
 
 If your Supabase project requires email confirmation, signing up creates the account but does not start syncing until the email is confirmed. Confirm the email first, then use Sign in.
+
+To avoid the email confirmation page redirecting to `localhost`, configure Supabase auth URLs:
+
+1. Open Supabase project `Authentication` -> `URL Configuration`.
+2. Set `Site URL` to a real URL, for example `https://github.com/longbeach2025/tab-deck-extension`.
+3. Add the same URL in `Redirect URLs` / `Additional Redirect URLs`.
 
 The extension stores Spaces, Collections, Links, and Notes in Supabase PostgreSQL with Row Level Security policies that limit each user to their own rows. Chrome local storage is still used as a local cache and offline fallback.
 
