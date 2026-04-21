@@ -145,13 +145,23 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 
 ### `v0.2.0-alpha.9`
 
-- 新增 `Export JSON` / `Import JSON` 备份恢复工具。
-- 增强 Cloud Sync 状态面板：
+- 新增 Recently Deleted：
+  - 删除 link / collection 会进入回收区，而不是直接丢失。
+  - 支持逐条恢复、清空回收区。
+  - 回收区记录同步到存储设置，默认最多保留 50 条。
+- 冲突处理升级为细粒度合并：
+  - 本地与云端按 space / collection / link 粒度 merge，不再仅靠整 deck 覆盖。
+  - link 层按 `url/id` 去重合并，降低多端并发编辑互相覆盖风险。
+- 搜索增强：
+  - 支持按 `space / collection / host / date` 过滤。
+  - 搜索结果高亮。
+  - 搜索结果可直接 Open 或 Move 到同 Space 其他 collection。
+- 同步状态可视化补全：
+  - Backend mode（Supabase / Chrome sync / Local）
   - Signed in as
   - Last synced
-  - Pending local changes
+  - Pending local changes（告警）
   - Cloud error details
-- README 增补 Supabase Auth URL 配置指引。
 
 ## 构建与打包
 
@@ -164,8 +174,6 @@ npm install
 
 ## 后续优化计划（Roadmap）
 
-1. 冲突处理升级：从“整 deck 按时间”升级为“collection/link 粒度合并”。
-2. 删除恢复：引入 Trash / Recently deleted（误删可恢复）。
-3. 体验增强（接近 Toby）：排序、折叠、批量移动、跨集合拖拽。
-4. 搜索增强：按 host/space/collection/日期过滤，结果高亮，结果直接操作。
-5. 发布准备：隐私说明、安装说明、截图、商店文案，逐步从 alpha 走向 beta 与 Web Store。
+1. 体验增强（接近 Toby）：排序、折叠、批量移动、跨集合拖拽。
+2. 搜索增强二期：支持按结果直接批量操作（批量移动、批量打开、批量删除）。
+3. 发布准备：隐私说明、安装说明、截图、商店文案，逐步从 alpha 走向 beta 与 Web Store。
