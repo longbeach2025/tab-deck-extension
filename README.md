@@ -2,11 +2,11 @@
 
 Current stable version: `0.1.0`
 
-Current development version: `0.2.0-alpha.4`
+Current development version: `0.2.0-alpha.5`
 
 [Download v0.1.0 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
 
-[Download v0.2.0-alpha.4 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.4/tab-deck-extension-v0.2.0-alpha.4.zip)
+[Download v0.2.0-alpha.5 ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.5/tab-deck-extension-v0.2.0-alpha.5.zip)
 
 Tab Deck is a Chrome tab manager inspired by the tab collection workflow of tools like Toby, but implemented from scratch without Toby branding, assets, or proprietary behavior.
 
@@ -44,7 +44,7 @@ Chrome does not allow true one-click installation from a random GitHub zip. A on
 
 ## Supabase Cloud Sync
 
-`v0.2.0-alpha.4` adds Supabase-backed sync while keeping the `v0.1.0` Chrome sync release available.
+`v0.2.0-alpha.5` adds Supabase-backed sync while keeping the `v0.1.0` Chrome sync release available.
 
 Setup:
 
@@ -52,7 +52,7 @@ Setup:
 2. Open the Supabase SQL Editor.
 3. Run `supabase/schema.sql`.
 4. In Supabase project settings, copy the Project URL and publishable key. In older Supabase projects this may be labeled as the anon public key.
-5. Install the `v0.2.0-alpha.4` extension package.
+5. Install the `v0.2.0-alpha.5` extension package.
 6. Open a new tab and paste the Project URL and publishable / anon key in Cloud Sync.
 7. Sign up or sign in with email and password.
 

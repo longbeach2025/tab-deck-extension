@@ -519,7 +519,10 @@ async function saveTabsFlow(tabs) {
 
   const collection = createCollection(collectionName.trim());
   activeSpace.collections.unshift(collection);
-  await addTabsToCollection(tabs, collection, { closeAfterSave: elements.closeAfterSave.checked });
+  clearSearch();
+  const savedCount = await addTabsToCollection(tabs, collection, { closeAfterSave: elements.closeAfterSave.checked });
+  const status = getStorageStatus();
+  showCloudMessage(`Saved ${savedCount} tabs to "${collection.name}". ${status.message}`, !status.synced);
 }
 
 async function addTabsToCollection(tabs, collection, options = {}) {
@@ -536,6 +539,8 @@ async function addTabsToCollection(tabs, collection, options = {}) {
     await chrome.tabs.remove(tabs.map((tab) => tab.id));
     await refreshAndRenderLiveTabs();
   }
+
+  return items.length;
 }
 
 async function openCollection(collection) {
@@ -623,6 +628,11 @@ async function runCloudAction(action) {
 function showCloudMessage(message, isWarning = false) {
   elements.cloudStatus.textContent = message;
   elements.cloudStatus.classList.toggle("warning", isWarning);
+}
+
+function clearSearch() {
+  query = "";
+  elements.searchInput.value = "";
 }
 
 function setCloudBusy(isBusy) {
