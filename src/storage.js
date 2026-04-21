@@ -1,11 +1,11 @@
 import {
+  clearPendingCloudDeck,
   fetchCloudDeck,
   formatCloudError,
   isCloudConfigured,
   isCloudReady,
   pushDeckToCloud,
-  queuePendingCloudDeck,
-  syncPendingCloudDeck
+  queuePendingCloudDeck
 } from "./cloud.js";
 
 const STORAGE_KEY = "tabDeckData";
@@ -327,10 +327,25 @@ async function loadCloudDeck() {
   }
 
   try {
-    await syncPendingCloudDeck();
     const [localDeck, remoteDeck] = await Promise.all([readLocalDeck(), fetchCloudDeck()]);
 
     if (remoteDeck && localDeck) {
+      const localIsStarter = isStarterDeck(localDeck);
+      const remoteIsStarter = isStarterDeck(remoteDeck);
+
+      if (localIsStarter && !remoteIsStarter) {
+        await writeLocalDeck(remoteDeck);
+        await clearPendingCloudDeck();
+        setCloudStatus("Supabase cloud sync is active.");
+        return normalizeDeck(remoteDeck);
+      }
+
+      if (!localIsStarter && remoteIsStarter) {
+        await pushDeckToCloud(localDeck);
+        setCloudStatus("Supabase cloud sync is active.");
+        return normalizeDeck(localDeck);
+      }
+
       const localUpdatedAt = Date.parse(localDeck.updatedAt || "");
       const remoteUpdatedAt = Date.parse(remoteDeck.updatedAt || "");
 
@@ -376,6 +391,23 @@ function setCloudStatus(message) {
     synced: true,
     message
   };
+}
+
+function isStarterDeck(deck) {
+  const normalized = normalizeDeck(deck);
+
+  if (countItems(normalized) > 0 || normalized.spaces.length !== 1) {
+    return false;
+  }
+
+  const [space] = normalized.spaces;
+
+  if (space.name !== "Workspace" || space.collections.length !== 1) {
+    return false;
+  }
+
+  const [collection] = space.collections;
+  return collection.name === "Inbox" && !collection.notes && collection.items.length === 0;
 }
 
 export function getActiveSpace(deck) {
