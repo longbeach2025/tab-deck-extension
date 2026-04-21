@@ -220,7 +220,9 @@ export async function fetchCloudDeck() {
     updatedAt: getLatestUpdatedAt([settingsResult.data, ...spaces, ...collections, ...links]),
     activeSpaceId: deckSpaces.some((space) => space.id === activeSpaceId) ? activeSpaceId : deckSpaces[0].id,
     settings: {
-      theme: "system"
+      theme: settingsResult.data?.theme || "system",
+      recentlyDeleted: Array.isArray(settingsResult.data?.recently_deleted) ? settingsResult.data.recently_deleted : [],
+      tombstones: Array.isArray(settingsResult.data?.tombstones) ? settingsResult.data.tombstones : []
     },
     spaces: deckSpaces
   };
@@ -350,6 +352,9 @@ function flattenDeck(deck, userId, timestamp) {
   const settings = {
     user_id: userId,
     active_space_id: deck.activeSpaceId || deck.spaces[0]?.id || null,
+    theme: deck.settings?.theme || "system",
+    recently_deleted: Array.isArray(deck.settings?.recentlyDeleted) ? deck.settings.recentlyDeleted : [],
+    tombstones: Array.isArray(deck.settings?.tombstones) ? deck.settings.tombstones : [],
     updated_at: timestamp
   };
   const spaces = [];

@@ -4,8 +4,20 @@
 create table if not exists public.tab_deck_user_settings (
   user_id uuid primary key references auth.users(id) on delete cascade,
   active_space_id text,
+  theme text not null default 'system',
+  recently_deleted jsonb not null default '[]'::jsonb,
+  tombstones jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now()
 );
+
+alter table public.tab_deck_user_settings
+  add column if not exists theme text not null default 'system';
+
+alter table public.tab_deck_user_settings
+  add column if not exists recently_deleted jsonb not null default '[]'::jsonb;
+
+alter table public.tab_deck_user_settings
+  add column if not exists tombstones jsonb not null default '[]'::jsonb;
 
 create table if not exists public.tab_deck_spaces (
   id text primary key,

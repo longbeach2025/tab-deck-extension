@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.10`
+- 开发版：`v0.2.0-alpha.11`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.10` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.10/tab-deck-extension-v0.2.0-alpha.10.zip)
+- [`v0.2.0-alpha.11` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.11/tab-deck-extension-v0.2.0-alpha.11.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.10`）
+## 核心功能（截至 `v0.2.0-alpha.11`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -67,12 +67,25 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 2. 打开 SQL Editor。
 3. 运行项目内脚本：`supabase/schema.sql`。
 
+如果你的 Supabase 项目是旧版本（`alpha.10` 或更早）已经建过表，请额外执行一次升级 SQL：
+
+```sql
+alter table public.tab_deck_user_settings
+  add column if not exists theme text not null default 'system';
+
+alter table public.tab_deck_user_settings
+  add column if not exists recently_deleted jsonb not null default '[]'::jsonb;
+
+alter table public.tab_deck_user_settings
+  add column if not exists tombstones jsonb not null default '[]'::jsonb;
+```
+
 ### 扩展端配置
 
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.10`。
+2. 安装 `v0.2.0-alpha.11`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -163,7 +176,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - Pending local changes（告警）
   - Cloud error details
 
-### `v0.2.0-alpha.10`
+### `v0.2.0-alpha.11`
 
 - 修复跨设备删除回流复活问题：
   - 引入删除墓碑（tombstone）机制，删除 collection/link 会写入可同步的删除标记。
