@@ -11,7 +11,10 @@
       <div class="brand-row">
         <div class="brand-mark" aria-hidden="true">TD</div>
         <div>
-          <h1>Tab Deck</h1>
+          <div class="brand-title-row">
+            <h1>Tab Deck</h1>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.7</span>
+          </div>
           <p id="deckStats">Loading</p>
         </div>
       </div>
@@ -60,6 +63,10 @@
           <button id="saveSelectedButton" class="primary-button">Save selected</button>
           <button id="saveAllButton" class="secondary-button">Save all</button>
         </div>
+        <label class="check-row select-row">
+          <input id="selectAllTabs" type="checkbox">
+          <span>Select all current tabs</span>
+        </label>
         <label class="check-row close-row">
           <input id="closeAfterSave" type="checkbox">
           <span>Close after save</span>

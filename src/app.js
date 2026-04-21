@@ -43,6 +43,7 @@ const elements = {
   spaceList: document.querySelector("#spaceList"),
   addSpaceButton: document.querySelector("#addSpaceButton"),
   refreshTabsButton: document.querySelector("#refreshTabsButton"),
+  selectAllTabs: document.querySelector("#selectAllTabs"),
   saveSelectedButton: document.querySelector("#saveSelectedButton"),
   saveAllButton: document.querySelector("#saveAllButton"),
   closeAfterSave: document.querySelector("#closeAfterSave"),
@@ -77,6 +78,7 @@ function bindEvents() {
 
   elements.addSpaceButton.addEventListener("click", addSpace);
   elements.refreshTabsButton.addEventListener("click", refreshAndRenderLiveTabs);
+  elements.selectAllTabs.addEventListener("change", toggleAllCurrentTabs);
   elements.saveSelectedButton.addEventListener("click", saveSelectedTabs);
   elements.saveAllButton.addEventListener("click", saveAllTabs);
   elements.newCollectionButton.addEventListener("click", addCollection);
@@ -114,6 +116,16 @@ async function refreshLiveTabs() {
 
 async function refreshAndRenderLiveTabs() {
   await refreshLiveTabs();
+  renderLiveTabs();
+}
+
+function toggleAllCurrentTabs() {
+  if (elements.selectAllTabs.checked) {
+    selectedTabIds = new Set(liveTabs.map((tab) => tab.id));
+  } else {
+    selectedTabIds.clear();
+  }
+
   renderLiveTabs();
 }
 
@@ -183,6 +195,7 @@ function renderHeader() {
 
 function renderLiveTabs() {
   elements.liveTabs.replaceChildren();
+  updateSelectAllTabs();
 
   if (liveTabs.length === 0) {
     const empty = document.createElement("p");
@@ -212,6 +225,7 @@ function renderLiveTabs() {
       } else {
         selectedTabIds.delete(tab.id);
       }
+      updateSelectAllTabs();
     });
 
     const icon = document.createElement("img");
@@ -235,6 +249,15 @@ function renderLiveTabs() {
     row.append(check, icon, textWrap);
     elements.liveTabs.append(row);
   }
+}
+
+function updateSelectAllTabs() {
+  const selectableCount = liveTabs.length;
+  const selectedCount = liveTabs.filter((tab) => selectedTabIds.has(tab.id)).length;
+
+  elements.selectAllTabs.disabled = selectableCount === 0;
+  elements.selectAllTabs.checked = selectableCount > 0 && selectedCount === selectableCount;
+  elements.selectAllTabs.indeterminate = selectedCount > 0 && selectedCount < selectableCount;
 }
 
 function renderCollections() {

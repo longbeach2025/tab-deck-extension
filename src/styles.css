@@ -91,6 +91,18 @@ button:disabled {
   font-weight: 800;
 }
 
+.brand-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.version-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 h1,
 h2,
 h3,
@@ -334,6 +346,10 @@ textarea {
 .check-row input {
   width: 16px;
   min-height: 16px;
+}
+
+.select-row {
+  margin-bottom: 8px;
 }
 
 .close-row {
