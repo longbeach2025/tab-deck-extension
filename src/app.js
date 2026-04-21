@@ -553,8 +553,9 @@ async function saveCloudSettings() {
     supabaseUrl: elements.cloudUrlInput.value,
     anonKey: elements.cloudAnonKeyInput.value
   });
-  elements.cloudStatus.textContent = "Supabase config saved. Sign in to sync.";
-  renderStats();
+  deck = await loadDeck();
+  render();
+  await renderCloudControls();
 }
 
 async function signInToCloud() {
@@ -562,20 +563,29 @@ async function signInToCloud() {
     await signInCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value);
     deck = await refreshDeckFromCloud();
     elements.cloudPasswordInput.value = "";
+    return "Signed in and synced.";
   });
 }
 
 async function signUpForCloud() {
   await runCloudAction(async () => {
-    await signUpCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value);
-    deck = await refreshDeckFromCloud();
+    const result = await signUpCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value);
     elements.cloudPasswordInput.value = "";
+
+    if (result.session) {
+      deck = await refreshDeckFromCloud();
+      return "Signed up and synced.";
+    }
+
+    return "Account created. Check your email to confirm, then sign in.";
   });
 }
 
 async function signOutOfCloud() {
   await runCloudAction(async () => {
     await signOutCloud();
+    deck = await loadDeck();
+    return "Signed out. Sign in to resume Supabase sync.";
   });
 }
 
@@ -589,9 +599,14 @@ async function runCloudAction(action) {
   setCloudBusy(true);
 
   try {
-    await action();
+    const message = await action();
     render();
     await renderCloudControls();
+
+    if (message) {
+      elements.cloudStatus.textContent = message;
+      elements.cloudStatus.classList.remove("warning");
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     elements.cloudStatus.textContent = message;

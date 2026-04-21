@@ -102,7 +102,7 @@ export async function signUpCloud(email, password) {
     throw error;
   }
 
-  return data.user;
+  return data;
 }
 
 export async function signOutCloud() {
