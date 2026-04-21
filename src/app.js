@@ -549,13 +549,14 @@ async function persistAndRender() {
 }
 
 async function saveCloudSettings() {
-  await saveCloudConfig({
-    supabaseUrl: elements.cloudUrlInput.value,
-    anonKey: elements.cloudAnonKeyInput.value
+  await runCloudAction(async () => {
+    await saveCloudConfig({
+      supabaseUrl: elements.cloudUrlInput.value,
+      anonKey: elements.cloudAnonKeyInput.value
+    });
+    deck = await loadDeck();
+    return "Supabase config saved. Sign in to sync.";
   });
-  deck = await loadDeck();
-  render();
-  await renderCloudControls();
 }
 
 async function signInToCloud() {
@@ -592,29 +593,35 @@ async function signOutOfCloud() {
 async function syncNow() {
   await runCloudAction(async () => {
     deck = await refreshDeckFromCloud();
+    return "Synced from Supabase.";
   });
 }
 
 async function runCloudAction(action) {
   setCloudBusy(true);
+  let finalMessage = "";
+  let isWarning = false;
 
   try {
     const message = await action();
     render();
-    await renderCloudControls();
-
-    if (message) {
-      elements.cloudStatus.textContent = message;
-      elements.cloudStatus.classList.remove("warning");
-    }
+    finalMessage = message || "";
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    elements.cloudStatus.textContent = message;
-    elements.cloudStatus.classList.add("warning");
+    finalMessage = error instanceof Error ? error.message : String(error);
+    isWarning = true;
   } finally {
     setCloudBusy(false);
     await renderCloudControls();
+
+    if (finalMessage) {
+      showCloudMessage(finalMessage, isWarning);
+    }
   }
+}
+
+function showCloudMessage(message, isWarning = false) {
+  elements.cloudStatus.textContent = message;
+  elements.cloudStatus.classList.toggle("warning", isWarning);
 }
 
 function setCloudBusy(isBusy) {
