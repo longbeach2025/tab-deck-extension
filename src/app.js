@@ -8,7 +8,7 @@ import {
   isDeckStorageChange,
   loadDeck,
   makeId,
-  refreshDeckFromCloud,
+  syncDeckWithCloud,
   saveDeck,
   tabToItem
 } from "./storage.js";
@@ -562,7 +562,7 @@ async function saveCloudSettings() {
 async function signInToCloud() {
   await runCloudAction(async () => {
     await signInCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value);
-    deck = await refreshDeckFromCloud();
+    deck = await syncDeckWithCloud();
     elements.cloudPasswordInput.value = "";
     return "Signed in and synced.";
   });
@@ -574,7 +574,7 @@ async function signUpForCloud() {
     elements.cloudPasswordInput.value = "";
 
     if (result.session) {
-      deck = await refreshDeckFromCloud();
+      deck = await syncDeckWithCloud();
       return "Signed up and synced.";
     }
 
@@ -592,8 +592,8 @@ async function signOutOfCloud() {
 
 async function syncNow() {
   await runCloudAction(async () => {
-    deck = await refreshDeckFromCloud();
-    return "Synced from Supabase.";
+    deck = await syncDeckWithCloud();
+    return "Synced with Supabase.";
   });
 }
 

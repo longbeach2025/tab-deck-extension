@@ -306,12 +306,12 @@ export function isDeckStorageChange(areaName, changes) {
   return Object.keys(changes).some((key) => key === SYNC_META_KEY || key.startsWith(SYNC_CHUNK_PREFIX));
 }
 
-export async function refreshDeckFromCloud() {
-  const cloudDeck = await loadCloudDeck({ forceCloud: true });
+export async function syncDeckWithCloud() {
+  const cloudDeck = await loadCloudDeck();
   return cloudDeck || loadDeck();
 }
 
-async function loadCloudDeck(options = {}) {
+async function loadCloudDeck() {
   if (!(await isCloudConfigured())) {
     return null;
   }
@@ -329,7 +329,7 @@ async function loadCloudDeck(options = {}) {
     await syncPendingCloudDeck();
     const [localDeck, remoteDeck] = await Promise.all([readLocalDeck(), fetchCloudDeck()]);
 
-    if (remoteDeck && localDeck && !options.forceCloud) {
+    if (remoteDeck && localDeck) {
       const localUpdatedAt = Date.parse(localDeck.updatedAt || "");
       const remoteUpdatedAt = Date.parse(remoteDeck.updatedAt || "");
 
