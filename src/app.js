@@ -35,6 +35,7 @@ const searchFilters = {
   dateFrom: ""
 };
 const MAX_RECENTLY_DELETED = 50;
+const MAX_TOMBSTONES = 500;
 
 const elements = {
   deckStats: document.querySelector("#deckStats"),
@@ -684,6 +685,12 @@ function renderLinkRow(space, item, collection) {
         addedAt: item.addedAt
       }
     });
+    addTombstone({
+      type: "link",
+      spaceId: space.id,
+      collectionId: collection.id,
+      url: item.url
+    });
     collection.items = collection.items.filter((candidate) => candidate.id !== item.id);
     collection.updatedAt = new Date().toISOString();
     await persistAndRender();
@@ -938,6 +945,11 @@ async function deleteCollection(collectionId) {
       }))
     }
   });
+  addTombstone({
+    type: "collection",
+    spaceId: activeSpace.id,
+    collectionId: collection.id
+  });
   activeSpace.collections = activeSpace.collections.filter((candidate) => candidate.id !== collectionId);
   await persistAndRender();
 }
@@ -952,6 +964,55 @@ function getRecentlyDeletedEntries() {
   }
 
   return deck.settings.recentlyDeleted;
+}
+
+function getTombstones() {
+  if (!deck.settings) {
+    deck.settings = {};
+  }
+
+  if (!Array.isArray(deck.settings.tombstones)) {
+    deck.settings.tombstones = [];
+  }
+
+  return deck.settings.tombstones;
+}
+
+function tombstoneKey(entry) {
+  if (entry.type === "collection") {
+    return `collection:${entry.spaceId || ""}:${entry.collectionId || ""}`;
+  }
+
+  if (entry.type === "link") {
+    return `link:${entry.spaceId || ""}:${entry.collectionId || ""}:${entry.url || ""}`;
+  }
+
+  return "";
+}
+
+function addTombstone(entry) {
+  const key = tombstoneKey(entry);
+  if (!key) {
+    return;
+  }
+
+  const entries = getTombstones();
+  const nextEntry = {
+    id: makeId("tombstone"),
+    deletedAt: new Date().toISOString(),
+    ...entry
+  };
+  const deduped = [nextEntry, ...entries.filter((candidate) => tombstoneKey(candidate) !== key)];
+  deck.settings.tombstones = deduped.slice(0, MAX_TOMBSTONES);
+}
+
+function removeTombstone(entry) {
+  const key = tombstoneKey(entry);
+  if (!key) {
+    return;
+  }
+
+  deck.settings.tombstones = getTombstones().filter((candidate) => tombstoneKey(candidate) !== key);
 }
 
 function addRecentlyDeleted(entry) {
@@ -992,6 +1053,11 @@ async function restoreDeletedEntry(entryId) {
         : []
     };
     targetSpace.collections.unshift(restoredCollection);
+    removeTombstone({
+      type: "collection",
+      spaceId: entry.spaceId,
+      collectionId: entry.collectionId
+    });
   }
 
   if (entry.type === "link" && entry.link?.url) {
@@ -1014,6 +1080,13 @@ async function restoreDeletedEntry(entryId) {
       });
       targetCollection.updatedAt = new Date().toISOString();
     }
+
+    removeTombstone({
+      type: "link",
+      spaceId: entry.spaceId,
+      collectionId: entry.collectionId,
+      url: entry.link.url
+    });
   }
 
   entries.splice(index, 1);

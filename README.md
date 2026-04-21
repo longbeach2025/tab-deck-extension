@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.9`
+- 开发版：`v0.2.0-alpha.10`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.9` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.9/tab-deck-extension-v0.2.0-alpha.9.zip)
+- [`v0.2.0-alpha.10` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.10/tab-deck-extension-v0.2.0-alpha.10.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.9`）
+## 核心功能（截至 `v0.2.0-alpha.10`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -72,7 +72,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.9`。
+2. 安装 `v0.2.0-alpha.10`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -162,6 +162,13 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - Last synced
   - Pending local changes（告警）
   - Cloud error details
+
+### `v0.2.0-alpha.10`
+
+- 修复跨设备删除回流复活问题：
+  - 引入删除墓碑（tombstone）机制，删除 collection/link 会写入可同步的删除标记。
+  - merge 时先应用 tombstone，再合并数据，防止旧设备把已删除数据重新推回云端。
+  - 恢复 Recently Deleted 项目时会自动移除对应 tombstone，确保恢复行为可同步。
 
 ## 构建与打包
 

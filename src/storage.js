@@ -13,6 +13,7 @@ const SYNC_META_KEY = "tabDeckSyncMeta";
 const SYNC_CHUNK_PREFIX = "tabDeckSyncChunk_";
 const SYNC_CHUNK_SIZE = 7000;
 const SYNC_SOFT_LIMIT_BYTES = 90000;
+const MAX_TOMBSTONES = 500;
 
 const DEFAULT_STATUS = {
   mode: "sync",
@@ -42,7 +43,8 @@ function defaultDeck() {
     activeSpaceId: spaceId,
     settings: {
       theme: "system",
-      recentlyDeleted: []
+      recentlyDeleted: [],
+      tombstones: []
     },
     spaces: [
       {
@@ -75,7 +77,8 @@ function normalizeDeck(deck) {
     settings: {
       theme: "system",
       ...(deck.settings || {}),
-      recentlyDeleted: normalizeRecentlyDeleted(deck.settings?.recentlyDeleted || [])
+      recentlyDeleted: normalizeRecentlyDeleted(deck.settings?.recentlyDeleted || []),
+      tombstones: normalizeTombstones(deck.settings?.tombstones || [])
     },
     activeSpaceId: deck.activeSpaceId || deck.spaces[0].id,
     spaces: deck.spaces.map((space) => ({
@@ -129,6 +132,65 @@ function normalizeRecentlyDeleted(entries) {
       link: entry.link || null
     }))
     .slice(0, 50);
+}
+
+function tombstoneKey(entry) {
+  if (entry.type === "collection") {
+    return `collection:${entry.spaceId || ""}:${entry.collectionId || ""}`;
+  }
+
+  if (entry.type === "link") {
+    return `link:${entry.spaceId || ""}:${entry.collectionId || ""}:${entry.url || ""}`;
+  }
+
+  return "";
+}
+
+function normalizeTombstones(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  const normalized = entries
+    .filter((entry) => entry && typeof entry === "object" && (entry.type === "collection" || entry.type === "link"))
+    .map((entry) => ({
+      id: entry.id || makeId("tombstone"),
+      type: entry.type,
+      deletedAt: entry.deletedAt || nowIso(),
+      spaceId: entry.spaceId || "",
+      collectionId: entry.collectionId || "",
+      url: entry.type === "link" ? entry.url || "" : ""
+    }))
+    .filter((entry) => {
+      if (!entry.collectionId) {
+        return false;
+      }
+
+      if (entry.type === "link" && !entry.url) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((a, b) => safeTs(b.deletedAt) - safeTs(a.deletedAt));
+
+  const map = new Map();
+
+  for (const entry of normalized) {
+    const key = tombstoneKey(entry);
+
+    if (!key) {
+      continue;
+    }
+
+    const existing = map.get(key);
+
+    if (!existing || safeTs(entry.deletedAt) > safeTs(existing.deletedAt)) {
+      map.set(key, entry);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => safeTs(b.deletedAt) - safeTs(a.deletedAt)).slice(0, MAX_TOMBSTONES);
 }
 
 function safeTs(value) {
@@ -285,6 +347,8 @@ function mergeDecks(localDeck, remoteDeck) {
     ...(local.settings?.recentlyDeleted || []),
     ...(remote.settings?.recentlyDeleted || [])
   ]).sort((a, b) => safeTs(b.deletedAt) - safeTs(a.deletedAt));
+  const mergedTombstones = normalizeTombstones([...(local.settings?.tombstones || []), ...(remote.settings?.tombstones || [])]);
+  const resolvedSpaces = applyTombstones(mergedSpaces, mergedTombstones);
 
   return normalizeDeck({
     version: 1,
@@ -292,9 +356,48 @@ function mergeDecks(localDeck, remoteDeck) {
     activeSpaceId,
     settings: {
       theme: local.settings?.theme || remote.settings?.theme || "system",
-      recentlyDeleted: mergedRecentlyDeleted
+      recentlyDeleted: mergedRecentlyDeleted,
+      tombstones: mergedTombstones
     },
-    spaces: mergedSpaces
+    spaces: resolvedSpaces
+  });
+}
+
+function applyTombstones(spaces, tombstones) {
+  if (!Array.isArray(spaces) || spaces.length === 0 || !Array.isArray(tombstones) || tombstones.length === 0) {
+    return spaces;
+  }
+
+  const collectionTombstones = tombstones.filter((entry) => entry.type === "collection");
+  const linkTombstones = tombstones.filter((entry) => entry.type === "link");
+
+  return spaces.map((space) => {
+    const filteredCollections = (space.collections || [])
+      .filter((collection) => {
+        return !collectionTombstones.some((entry) => {
+          const sameSpace = !entry.spaceId || entry.spaceId === space.id;
+          return sameSpace && entry.collectionId === collection.id;
+        });
+      })
+      .map((collection) => {
+        const filteredItems = (collection.items || []).filter((item) => {
+          return !linkTombstones.some((entry) => {
+            const sameSpace = !entry.spaceId || entry.spaceId === space.id;
+            const sameCollection = entry.collectionId === collection.id;
+            return sameSpace && sameCollection && entry.url === item.url;
+          });
+        });
+
+        return {
+          ...collection,
+          items: filteredItems
+        };
+      });
+
+    return {
+      ...space,
+      collections: filteredCollections
+    };
   });
 }
 
