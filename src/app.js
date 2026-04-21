@@ -28,6 +28,13 @@ let deck;
 let liveTabs = [];
 let selectedTabIds = new Set();
 let query = "";
+const searchFilters = {
+  spaceId: "all",
+  collection: "",
+  host: "",
+  dateFrom: ""
+};
+const MAX_RECENTLY_DELETED = 50;
 
 const elements = {
   deckStats: document.querySelector("#deckStats"),
@@ -37,6 +44,7 @@ const elements = {
   cloudEmailInput: document.querySelector("#cloudEmailInput"),
   cloudPasswordInput: document.querySelector("#cloudPasswordInput"),
   cloudSignedIn: document.querySelector("#cloudSignedIn"),
+  cloudMode: document.querySelector("#cloudMode"),
   cloudLastSynced: document.querySelector("#cloudLastSynced"),
   cloudPending: document.querySelector("#cloudPending"),
   cloudErrorDetails: document.querySelector("#cloudErrorDetails"),
@@ -49,6 +57,11 @@ const elements = {
   importDeckButton: document.querySelector("#importDeckButton"),
   importDeckInput: document.querySelector("#importDeckInput"),
   searchInput: document.querySelector("#searchInput"),
+  searchSpaceFilter: document.querySelector("#searchSpaceFilter"),
+  searchCollectionFilter: document.querySelector("#searchCollectionFilter"),
+  searchHostFilter: document.querySelector("#searchHostFilter"),
+  searchDateFrom: document.querySelector("#searchDateFrom"),
+  clearSearchFiltersButton: document.querySelector("#clearSearchFiltersButton"),
   spaceList: document.querySelector("#spaceList"),
   addSpaceButton: document.querySelector("#addSpaceButton"),
   refreshTabsButton: document.querySelector("#refreshTabsButton"),
@@ -57,6 +70,8 @@ const elements = {
   saveAllButton: document.querySelector("#saveAllButton"),
   closeAfterSave: document.querySelector("#closeAfterSave"),
   liveTabs: document.querySelector("#liveTabs"),
+  recentlyDeletedList: document.querySelector("#recentlyDeletedList"),
+  clearDeletedButton: document.querySelector("#clearDeletedButton"),
   activeSpaceMeta: document.querySelector("#activeSpaceMeta"),
   activeSpaceName: document.querySelector("#activeSpaceName"),
   renameSpaceButton: document.querySelector("#renameSpaceButton"),
@@ -64,6 +79,7 @@ const elements = {
   newCollectionButton: document.querySelector("#newCollectionButton"),
   emptyCreateButton: document.querySelector("#emptyCreateButton"),
   emptyState: document.querySelector("#emptyState"),
+  searchResults: document.querySelector("#searchResults"),
   collectionGrid: document.querySelector("#collectionGrid"),
   collectionTemplate: document.querySelector("#collectionTemplate")
 };
@@ -83,10 +99,33 @@ function bindEvents() {
   elements.searchInput.addEventListener("input", (event) => {
     query = event.target.value.trim().toLowerCase();
     renderCollections();
+    renderSearchResults();
   });
+  elements.searchSpaceFilter.addEventListener("change", (event) => {
+    searchFilters.spaceId = event.target.value;
+    renderCollections();
+    renderSearchResults();
+  });
+  elements.searchCollectionFilter.addEventListener("input", (event) => {
+    searchFilters.collection = event.target.value.trim().toLowerCase();
+    renderCollections();
+    renderSearchResults();
+  });
+  elements.searchHostFilter.addEventListener("input", (event) => {
+    searchFilters.host = event.target.value.trim().toLowerCase();
+    renderCollections();
+    renderSearchResults();
+  });
+  elements.searchDateFrom.addEventListener("change", (event) => {
+    searchFilters.dateFrom = event.target.value;
+    renderCollections();
+    renderSearchResults();
+  });
+  elements.clearSearchFiltersButton.addEventListener("click", clearSearchFilters);
 
   elements.addSpaceButton.addEventListener("click", addSpace);
   elements.refreshTabsButton.addEventListener("click", refreshAndRenderLiveTabs);
+  elements.clearDeletedButton.addEventListener("click", clearRecentlyDeleted);
   elements.selectAllTabs.addEventListener("change", toggleAllCurrentTabs);
   elements.saveSelectedButton.addEventListener("click", saveSelectedTabs);
   elements.saveAllButton.addEventListener("click", saveAllTabs);
@@ -143,9 +182,12 @@ function toggleAllCurrentTabs() {
 
 function render() {
   renderStats();
+  renderSearchFilters();
   renderSpaces();
   renderHeader();
   renderLiveTabs();
+  renderRecentlyDeleted();
+  renderSearchResults();
   renderCollections();
 }
 
@@ -282,20 +324,16 @@ function renderCollections() {
   const filteredCollections = activeSpace.collections
     .map((collection) => ({
       collection,
-      items: filterItems(collection)
+      items: filterItems(activeSpace, collection)
     }))
     .filter(({ collection, items }) => {
-      if (!query) {
-        return true;
-      }
-
-      return collection.name.toLowerCase().includes(query) || collection.notes.toLowerCase().includes(query) || items.length;
+      return isCollectionMatchFilters(activeSpace, collection) || items.length > 0;
     });
 
   elements.emptyState.classList.toggle("hidden", activeSpace.collections.length > 0);
 
   for (const { collection, items } of filteredCollections) {
-    elements.collectionGrid.append(renderCollectionCard(collection, items));
+    elements.collectionGrid.append(renderCollectionCard(activeSpace, collection, items));
   }
 
   if (activeSpace.collections.length > 0 && filteredCollections.length === 0) {
@@ -306,7 +344,204 @@ function renderCollections() {
   }
 }
 
-function renderCollectionCard(collection, visibleItems) {
+function renderSearchFilters() {
+  const optionValues = new Set(Array.from(elements.searchSpaceFilter.options).map((option) => option.value));
+
+  for (const space of deck.spaces) {
+    if (!optionValues.has(space.id)) {
+      const option = document.createElement("option");
+      option.value = space.id;
+      option.textContent = space.name;
+      elements.searchSpaceFilter.append(option);
+    }
+  }
+
+  for (const option of Array.from(elements.searchSpaceFilter.options)) {
+    if (option.value !== "all" && !deck.spaces.some((space) => space.id === option.value)) {
+      option.remove();
+    }
+  }
+
+  if (searchFilters.spaceId !== "all" && !deck.spaces.some((space) => space.id === searchFilters.spaceId)) {
+    searchFilters.spaceId = "all";
+  }
+
+  elements.searchSpaceFilter.value = searchFilters.spaceId;
+  elements.searchCollectionFilter.value = searchFilters.collection;
+  elements.searchHostFilter.value = searchFilters.host;
+  elements.searchDateFrom.value = searchFilters.dateFrom;
+}
+
+function isSearchActive() {
+  return !!(query || searchFilters.collection || searchFilters.host || searchFilters.dateFrom || searchFilters.spaceId !== "all");
+}
+
+function renderSearchResults() {
+  if (!isSearchActive()) {
+    elements.searchResults.classList.add("hidden");
+    elements.searchResults.replaceChildren();
+    return;
+  }
+
+  const results = buildSearchResults();
+  elements.searchResults.classList.remove("hidden");
+  elements.searchResults.replaceChildren();
+
+  const header = document.createElement("div");
+  header.className = "search-results-header";
+
+  const title = document.createElement("h3");
+  title.textContent = "Search results";
+
+  const meta = document.createElement("span");
+  meta.className = "eyebrow";
+  meta.textContent = `${results.length} links`;
+
+  header.append(title, meta);
+  elements.searchResults.append(header);
+
+  if (results.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted compact";
+    empty.textContent = "No matching links.";
+    elements.searchResults.append(empty);
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "search-results-list";
+
+  for (const result of results) {
+    const row = document.createElement("div");
+    row.className = "search-result-row";
+
+    const main = document.createElement("div");
+    main.className = "search-result-main";
+
+    const link = document.createElement("a");
+    link.href = result.item.url;
+    link.title = result.item.url;
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      chrome.tabs.create({ url: result.item.url });
+    });
+    applyHighlightedText(link, result.item.title || result.item.url, query);
+
+    const info = document.createElement("div");
+    info.className = "search-result-meta";
+    applyHighlightedText(
+      info,
+      `${result.spaceName} / ${result.collectionName} · ${getHost(result.item.url)} · ${formatDateLabel(result.item.addedAt)}`,
+      query
+    );
+
+    main.append(link, info);
+
+    const actions = document.createElement("div");
+    actions.className = "search-result-actions";
+
+    const openButton = document.createElement("button");
+    openButton.className = "icon-button";
+    openButton.type = "button";
+    openButton.title = "Open result";
+    openButton.setAttribute("aria-label", "Open result");
+    openButton.textContent = "O";
+    openButton.addEventListener("click", () => chrome.tabs.create({ url: result.item.url }));
+
+    const moveButton = document.createElement("button");
+    moveButton.className = "icon-button";
+    moveButton.type = "button";
+    moveButton.title = "Move result";
+    moveButton.setAttribute("aria-label", "Move result");
+    moveButton.textContent = "M";
+    moveButton.addEventListener("click", async () => {
+      await moveSearchResult(result);
+    });
+
+    actions.append(openButton, moveButton);
+    row.append(main, actions);
+    list.append(row);
+  }
+
+  elements.searchResults.append(list);
+}
+
+function buildSearchResults() {
+  const results = [];
+
+  for (const space of deck.spaces) {
+    if (searchFilters.spaceId !== "all" && space.id !== searchFilters.spaceId) {
+      continue;
+    }
+
+    for (const collection of space.collections) {
+      if (searchFilters.collection && !collection.name.toLowerCase().includes(searchFilters.collection)) {
+        continue;
+      }
+
+      for (const item of collection.items) {
+        if (isItemMatchFilters(collection, item, space)) {
+          results.push({
+            spaceId: space.id,
+            spaceName: space.name,
+            collectionId: collection.id,
+            collectionName: collection.name,
+            item
+          });
+        }
+      }
+    }
+  }
+
+  results.sort((a, b) => toTimestamp(b.item.addedAt) - toTimestamp(a.item.addedAt));
+  return results;
+}
+
+function renderRecentlyDeleted() {
+  const entries = getRecentlyDeletedEntries();
+  elements.recentlyDeletedList.replaceChildren();
+  elements.clearDeletedButton.disabled = entries.length === 0;
+
+  if (entries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted compact";
+    empty.textContent = "No deleted items.";
+    elements.recentlyDeletedList.append(empty);
+    return;
+  }
+
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "deleted-item";
+
+    const textWrap = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "deleted-title";
+    title.textContent = getDeletedEntryTitle(entry);
+
+    const meta = document.createElement("div");
+    meta.className = "deleted-meta";
+    const deletedAt = entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : "Unknown time";
+    meta.textContent = `${entry.type === "collection" ? "Collection" : "Link"} · ${deletedAt}`;
+
+    textWrap.append(title, meta);
+
+    const restoreButton = document.createElement("button");
+    restoreButton.className = "icon-button";
+    restoreButton.type = "button";
+    restoreButton.title = "Restore";
+    restoreButton.setAttribute("aria-label", "Restore");
+    restoreButton.textContent = "R";
+    restoreButton.addEventListener("click", async () => {
+      await restoreDeletedEntry(entry.id);
+    });
+
+    row.append(textWrap, restoreButton);
+    elements.recentlyDeletedList.append(row);
+  }
+}
+
+function renderCollectionCard(space, collection, visibleItems) {
   const fragment = elements.collectionTemplate.content.cloneNode(true);
   const card = fragment.querySelector(".collection-card");
   const nameInput = fragment.querySelector(".collection-name");
@@ -385,7 +620,7 @@ function renderCollectionCard(collection, visibleItems) {
   }
 
   for (const item of visibleItems) {
-    linkList.append(renderLinkRow(item, collection));
+    linkList.append(renderLinkRow(space, item, collection));
   }
 
   if (visibleItems.length === 0) {
@@ -398,7 +633,7 @@ function renderCollectionCard(collection, visibleItems) {
   return fragment;
 }
 
-function renderLinkRow(item, collection) {
+function renderLinkRow(space, item, collection) {
   const row = document.createElement("div");
   row.className = "link-row";
 
@@ -421,11 +656,11 @@ function renderLinkRow(item, collection) {
 
   const title = document.createElement("span");
   title.className = "tab-title";
-  title.textContent = item.title || item.url;
+  applyHighlightedText(title, item.title || item.url, query);
 
   const host = document.createElement("span");
   host.className = "tab-host";
-  host.textContent = getHost(item.url);
+  applyHighlightedText(host, getHost(item.url), query);
 
   text.append(title, host);
   link.append(icon, text);
@@ -437,6 +672,18 @@ function renderLinkRow(item, collection) {
   removeButton.setAttribute("aria-label", "Remove link");
   removeButton.textContent = "X";
   removeButton.addEventListener("click", async () => {
+    addRecentlyDeleted({
+      type: "link",
+      spaceId: space.id,
+      collectionId: collection.id,
+      link: {
+        id: item.id,
+        title: item.title,
+        url: item.url,
+        favIconUrl: item.favIconUrl || "",
+        addedAt: item.addedAt
+      }
+    });
     collection.items = collection.items.filter((candidate) => candidate.id !== item.id);
     collection.updatedAt = new Date().toISOString();
     await persistAndRender();
@@ -446,14 +693,157 @@ function renderLinkRow(item, collection) {
   return row;
 }
 
-function filterItems(collection) {
-  if (!query) {
-    return collection.items;
+function filterItems(space, collection) {
+  return collection.items.filter((item) => isItemMatchFilters(collection, item, space));
+}
+
+function isCollectionMatchFilters(space, collection) {
+  const inSelectedSpace = searchFilters.spaceId === "all" || searchFilters.spaceId === space.id;
+  if (!inSelectedSpace) {
+    return false;
   }
 
-  return collection.items.filter((item) => {
-    return [item.title, item.url, getHost(item.url)].some((value) => value.toLowerCase().includes(query));
-  });
+  if (searchFilters.collection && !collection.name.toLowerCase().includes(searchFilters.collection)) {
+    return false;
+  }
+
+  if (query) {
+    return [space.name, collection.name, collection.notes].some((value) => (value || "").toLowerCase().includes(query));
+  }
+
+  return true;
+}
+
+function isItemMatchFilters(collection, item, space = getActiveSpace(deck)) {
+  const host = getHost(item.url || "").toLowerCase();
+  const addedAt = toTimestamp(item.addedAt);
+  const searchDateFromTs = searchFilters.dateFrom ? Date.parse(`${searchFilters.dateFrom}T00:00:00`) : 0;
+  const inSelectedSpace = searchFilters.spaceId === "all" || searchFilters.spaceId === space.id;
+
+  if (!inSelectedSpace) {
+    return false;
+  }
+
+  if (searchFilters.host && !host.includes(searchFilters.host)) {
+    return false;
+  }
+
+  if (searchFilters.collection && !collection.name.toLowerCase().includes(searchFilters.collection)) {
+    return false;
+  }
+
+  if (searchDateFromTs && addedAt < searchDateFromTs) {
+    return false;
+  }
+
+  if (!query) {
+    return true;
+  }
+
+  return [item.title, item.url, host, collection.name, space.name]
+    .filter(Boolean)
+    .some((value) => value.toLowerCase().includes(query));
+}
+
+function applyHighlightedText(node, text, keyword) {
+  node.replaceChildren();
+  const value = text || "";
+  const term = (keyword || "").trim();
+
+  if (!term) {
+    node.textContent = value;
+    return;
+  }
+
+  const lowerValue = value.toLowerCase();
+  const lowerTerm = term.toLowerCase();
+  let index = 0;
+  let matchIndex = lowerValue.indexOf(lowerTerm, index);
+
+  if (matchIndex < 0) {
+    node.textContent = value;
+    return;
+  }
+
+  while (matchIndex >= 0) {
+    if (matchIndex > index) {
+      node.append(document.createTextNode(value.slice(index, matchIndex)));
+    }
+
+    const mark = document.createElement("mark");
+    mark.textContent = value.slice(matchIndex, matchIndex + lowerTerm.length);
+    node.append(mark);
+
+    index = matchIndex + lowerTerm.length;
+    matchIndex = lowerValue.indexOf(lowerTerm, index);
+  }
+
+  if (index < value.length) {
+    node.append(document.createTextNode(value.slice(index)));
+  }
+}
+
+function toTimestamp(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatDateLabel(value) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) {
+    return "Unknown";
+  }
+
+  return new Date(ts).toLocaleDateString();
+}
+
+async function moveSearchResult(result) {
+  const sourceSpace = deck.spaces.find((space) => space.id === result.spaceId);
+  if (!sourceSpace) {
+    return;
+  }
+
+  const sourceCollection = sourceSpace.collections.find((collection) => collection.id === result.collectionId);
+  if (!sourceCollection) {
+    return;
+  }
+
+  const targetName = prompt("Move to collection (same space)", result.collectionName);
+  if (!targetName || !targetName.trim()) {
+    return;
+  }
+
+  const cleanedName = targetName.trim();
+  let targetCollection = sourceSpace.collections.find((collection) => collection.name.toLowerCase() === cleanedName.toLowerCase());
+
+  if (!targetCollection) {
+    targetCollection = createCollection(cleanedName);
+    sourceSpace.collections.unshift(targetCollection);
+  }
+
+  if (targetCollection.id === sourceCollection.id) {
+    return;
+  }
+
+  const item = sourceCollection.items.find((candidate) => candidate.id === result.item.id);
+  if (!item) {
+    return;
+  }
+
+  const existsInTarget = targetCollection.items.some((candidate) => candidate.url === item.url);
+  sourceCollection.items = sourceCollection.items.filter((candidate) => candidate.id !== item.id);
+
+  if (!existsInTarget) {
+    targetCollection.items.unshift(item);
+    targetCollection.updatedAt = new Date().toISOString();
+  }
+
+  sourceCollection.updatedAt = new Date().toISOString();
+  await persistAndRender();
 }
 
 async function addSpace() {
@@ -529,8 +919,134 @@ async function deleteCollection(collectionId) {
     return;
   }
 
+  addRecentlyDeleted({
+    type: "collection",
+    spaceId: activeSpace.id,
+    collectionId: collection.id,
+    collection: {
+      id: collection.id,
+      name: collection.name,
+      notes: collection.notes,
+      createdAt: collection.createdAt,
+      updatedAt: collection.updatedAt,
+      items: collection.items.map((item) => ({
+        id: item.id,
+        title: item.title,
+        url: item.url,
+        favIconUrl: item.favIconUrl || "",
+        addedAt: item.addedAt
+      }))
+    }
+  });
   activeSpace.collections = activeSpace.collections.filter((candidate) => candidate.id !== collectionId);
   await persistAndRender();
+}
+
+function getRecentlyDeletedEntries() {
+  if (!deck.settings) {
+    deck.settings = {};
+  }
+
+  if (!Array.isArray(deck.settings.recentlyDeleted)) {
+    deck.settings.recentlyDeleted = [];
+  }
+
+  return deck.settings.recentlyDeleted;
+}
+
+function addRecentlyDeleted(entry) {
+  const entries = getRecentlyDeletedEntries();
+  entries.unshift({
+    id: makeId("deleted"),
+    deletedAt: new Date().toISOString(),
+    ...entry
+  });
+  deck.settings.recentlyDeleted = entries.slice(0, MAX_RECENTLY_DELETED);
+}
+
+async function restoreDeletedEntry(entryId) {
+  const entries = getRecentlyDeletedEntries();
+  const index = entries.findIndex((entry) => entry.id === entryId);
+
+  if (index < 0) {
+    return;
+  }
+
+  const entry = entries[index];
+  const activeSpace = getActiveSpace(deck);
+  const targetSpace = deck.spaces.find((space) => space.id === entry.spaceId) || activeSpace;
+
+  if (entry.type === "collection" && entry.collection) {
+    const collectionIdInUse = targetSpace.collections.some((collection) => collection.id === entry.collection.id);
+    const restoredCollection = {
+      ...entry.collection,
+      id: collectionIdInUse ? makeId("collection") : entry.collection.id,
+      items: Array.isArray(entry.collection.items)
+        ? entry.collection.items.map((item) => ({
+            id: item.id,
+            title: item.title,
+            url: item.url,
+            favIconUrl: item.favIconUrl || "",
+            addedAt: item.addedAt
+          }))
+        : []
+    };
+    targetSpace.collections.unshift(restoredCollection);
+  }
+
+  if (entry.type === "link" && entry.link?.url) {
+    let targetCollection = targetSpace.collections.find((collection) => collection.id === entry.collectionId);
+
+    if (!targetCollection) {
+      targetCollection = createCollection("Recovered");
+      targetSpace.collections.unshift(targetCollection);
+    }
+
+    const hasSameUrl = targetCollection.items.some((item) => item.url === entry.link.url);
+    if (!hasSameUrl) {
+      const itemIdInUse = targetCollection.items.some((item) => item.id === entry.link.id);
+      targetCollection.items.unshift({
+        id: itemIdInUse ? makeId("link") : entry.link.id,
+        title: entry.link.title || entry.link.url,
+        url: entry.link.url,
+        favIconUrl: entry.link.favIconUrl || "",
+        addedAt: entry.link.addedAt || new Date().toISOString()
+      });
+      targetCollection.updatedAt = new Date().toISOString();
+    }
+  }
+
+  entries.splice(index, 1);
+  deck.settings.recentlyDeleted = entries;
+  deck.activeSpaceId = targetSpace.id;
+  await persistAndRender();
+}
+
+async function clearRecentlyDeleted() {
+  const entries = getRecentlyDeletedEntries();
+  if (entries.length === 0) {
+    return;
+  }
+
+  const confirmed = confirm("Clear all recently deleted items?");
+  if (!confirmed) {
+    return;
+  }
+
+  deck.settings.recentlyDeleted = [];
+  await persistAndRender();
+}
+
+function getDeletedEntryTitle(entry) {
+  if (entry.type === "collection") {
+    return entry.collection?.name || "Untitled collection";
+  }
+
+  if (entry.type === "link") {
+    return entry.link?.title || entry.link?.url || "Untitled link";
+  }
+
+  return "Unknown item";
 }
 
 async function saveSelectedTabs() {
@@ -700,8 +1216,11 @@ function showCloudMessage(message, isWarning = false) {
 function renderCloudDetails() {
   const status = getStorageStatus();
   const lastSyncedLabel = status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString() : "Never";
+  const backendLabel = status.mode === "cloud" ? "Supabase cloud" : status.mode === "sync" ? "Chrome sync" : "Local only";
+  elements.cloudMode.textContent = `Backend: ${backendLabel}`;
   elements.cloudLastSynced.textContent = `Last synced: ${lastSyncedLabel}`;
   elements.cloudPending.textContent = `Pending local changes: ${status.pendingLocalChanges ? "Yes" : "No"}`;
+  elements.cloudPending.classList.toggle("warning", status.pendingLocalChanges);
 
   if (status.lastError) {
     elements.cloudErrorDetails.textContent = `Cloud error details: ${status.lastError}`;
@@ -715,6 +1234,19 @@ function renderCloudDetails() {
 function clearSearch() {
   query = "";
   elements.searchInput.value = "";
+}
+
+function clearSearchFilters() {
+  searchFilters.spaceId = "all";
+  searchFilters.collection = "";
+  searchFilters.host = "";
+  searchFilters.dateFrom = "";
+  elements.searchSpaceFilter.value = "all";
+  elements.searchCollectionFilter.value = "";
+  elements.searchHostFilter.value = "";
+  elements.searchDateFrom.value = "";
+  renderCollections();
+  renderSearchResults();
 }
 
 function setCloudBusy(isBusy) {

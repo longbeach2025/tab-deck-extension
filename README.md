@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.8`
+- 开发版：`v0.2.0-alpha.9`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.8` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.8/tab-deck-extension-v0.2.0-alpha.8.zip)
+- [`v0.2.0-alpha.9` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.9/tab-deck-extension-v0.2.0-alpha.9.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.8`）
+## 核心功能（截至 `v0.2.0-alpha.9`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -72,7 +72,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.8`。
+2. 安装 `v0.2.0-alpha.9`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -143,7 +143,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 - 在侧栏显著显示版本号。
 - Current Window 新增三态“全选/全不选”复选框。
 
-### `v0.2.0-alpha.8`
+### `v0.2.0-alpha.9`
 
 - 新增 `Export JSON` / `Import JSON` 备份恢复工具。
 - 增强 Cloud Sync 状态面板：

@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.7</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.9</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -23,6 +23,15 @@
         <span class="search-icon" aria-hidden="true"></span>
         <input id="searchInput" type="search" placeholder="Search tabs, links, notes">
       </div>
+      <div class="search-filters">
+        <select id="searchSpaceFilter" aria-label="Filter by space">
+          <option value="all">All spaces</option>
+        </select>
+        <input id="searchCollectionFilter" type="search" placeholder="Filter collection">
+        <input id="searchHostFilter" type="search" placeholder="Filter host">
+        <input id="searchDateFrom" type="date" aria-label="Filter from date">
+        <button id="clearSearchFiltersButton" class="secondary-button">Clear filters</button>
+      </div>
 
       <div class="side-section cloud-section">
         <div class="section-title">
@@ -30,6 +39,7 @@
           <button id="syncNowButton" class="icon-button" title="Sync now" aria-label="Sync now">S</button>
         </div>
         <p id="cloudStatus" class="cloud-status">Checking cloud status</p>
+        <p id="cloudMode" class="cloud-meta">Backend: Chrome sync</p>
         <p id="cloudSignedIn" class="cloud-meta">Signed in as: Not signed in</p>
         <p id="cloudLastSynced" class="cloud-meta">Last synced: Never</p>
         <p id="cloudPending" class="cloud-meta">Pending local changes: No</p>
@@ -88,6 +98,14 @@
         </label>
         <div id="liveTabs" class="live-tabs"></div>
       </div>
+
+      <div class="side-section">
+        <div class="section-title">
+          <span>Recently Deleted</span>
+          <button id="clearDeletedButton" class="icon-button" title="Clear deleted items" aria-label="Clear deleted items">X</button>
+        </div>
+        <div id="recentlyDeletedList" class="deleted-list"></div>
+      </div>
     </aside>
 
     <main class="workspace">
@@ -109,6 +127,7 @@
         <button id="emptyCreateButton" class="primary-button">Create collection</button>
       </section>
 
+      <section id="searchResults" class="search-results hidden"></section>
       <section id="collectionGrid" class="collection-grid" aria-live="polite"></section>
     </main>
 

@@ -41,7 +41,8 @@ function defaultDeck() {
     updatedAt: nowIso(),
     activeSpaceId: spaceId,
     settings: {
-      theme: "system"
+      theme: "system",
+      recentlyDeleted: []
     },
     spaces: [
       {
@@ -71,7 +72,11 @@ function normalizeDeck(deck) {
   const normalized = {
     version: 1,
     updatedAt: deck.updatedAt || nowIso(),
-    settings: { theme: "system", ...(deck.settings || {}) },
+    settings: {
+      theme: "system",
+      ...(deck.settings || {}),
+      recentlyDeleted: normalizeRecentlyDeleted(deck.settings?.recentlyDeleted || [])
+    },
     activeSpaceId: deck.activeSpaceId || deck.spaces[0].id,
     spaces: deck.spaces.map((space) => ({
       id: space.id || makeId("space"),
@@ -105,6 +110,192 @@ function normalizeDeck(deck) {
   }
 
   return normalized;
+}
+
+function normalizeRecentlyDeleted(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry && typeof entry === "object" && (entry.type === "collection" || entry.type === "link"))
+    .map((entry) => ({
+      id: entry.id || makeId("deleted"),
+      type: entry.type,
+      deletedAt: entry.deletedAt || nowIso(),
+      spaceId: entry.spaceId || "",
+      collectionId: entry.collectionId || "",
+      collection: entry.collection || null,
+      link: entry.link || null
+    }))
+    .slice(0, 50);
+}
+
+function safeTs(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function chooseLaterTimestamp(a, b) {
+  return safeTs(a) >= safeTs(b) ? (a || b || nowIso()) : (b || a || nowIso());
+}
+
+function cloneCollection(collection) {
+  return {
+    id: collection.id,
+    name: collection.name,
+    notes: collection.notes,
+    createdAt: collection.createdAt,
+    updatedAt: collection.updatedAt,
+    items: Array.isArray(collection.items)
+      ? collection.items.map((item) => ({
+          id: item.id,
+          title: item.title,
+          url: item.url,
+          favIconUrl: compactFavIconUrl(item.favIconUrl),
+          addedAt: item.addedAt
+        }))
+      : []
+  };
+}
+
+function mergeItems(localItems, remoteItems) {
+  const merged = new Map();
+
+  for (const item of [...remoteItems, ...localItems]) {
+    const key = item.url || item.id;
+
+    if (!key) {
+      continue;
+    }
+
+    const existing = merged.get(key);
+
+    if (!existing) {
+      merged.set(key, {
+        id: item.id || makeId("link"),
+        title: item.title || item.url || "Untitled",
+        url: item.url,
+        favIconUrl: compactFavIconUrl(item.favIconUrl),
+        addedAt: item.addedAt || nowIso()
+      });
+      continue;
+    }
+
+    const newer = safeTs(item.addedAt) >= safeTs(existing.addedAt) ? item : existing;
+    merged.set(key, {
+      id: newer.id || existing.id || makeId("link"),
+      title: newer.title || existing.title || newer.url || "Untitled",
+      url: newer.url || existing.url,
+      favIconUrl: compactFavIconUrl(newer.favIconUrl) || compactFavIconUrl(existing.favIconUrl),
+      addedAt: chooseLaterTimestamp(newer.addedAt, existing.addedAt)
+    });
+  }
+
+  return Array.from(merged.values()).sort((a, b) => safeTs(b.addedAt) - safeTs(a.addedAt));
+}
+
+function mergeCollections(localCollection, remoteCollection) {
+  const preferred = safeTs(localCollection.updatedAt) >= safeTs(remoteCollection.updatedAt) ? localCollection : remoteCollection;
+  return {
+    id: preferred.id || makeId("collection"),
+    name: preferred.name || "Untitled",
+    notes: preferred.notes || "",
+    createdAt: localCollection.createdAt || remoteCollection.createdAt || nowIso(),
+    updatedAt: chooseLaterTimestamp(localCollection.updatedAt, remoteCollection.updatedAt),
+    items: mergeItems(localCollection.items || [], remoteCollection.items || [])
+  };
+}
+
+function mergeSpaceCollections(localSpace, remoteSpace) {
+  const mergedCollections = [];
+  const remoteById = new Map((remoteSpace.collections || []).map((collection) => [collection.id, cloneCollection(collection)]));
+  const seenIds = new Set();
+
+  for (const localCollection of localSpace.collections || []) {
+    if (remoteById.has(localCollection.id)) {
+      mergedCollections.push(mergeCollections(cloneCollection(localCollection), remoteById.get(localCollection.id)));
+      seenIds.add(localCollection.id);
+      continue;
+    }
+
+    mergedCollections.push(cloneCollection(localCollection));
+    seenIds.add(localCollection.id);
+  }
+
+  for (const remoteCollection of remoteSpace.collections || []) {
+    if (!seenIds.has(remoteCollection.id)) {
+      mergedCollections.push(cloneCollection(remoteCollection));
+    }
+  }
+
+  return mergedCollections.sort((a, b) => safeTs(b.updatedAt) - safeTs(a.updatedAt));
+}
+
+function mergeDecks(localDeck, remoteDeck) {
+  const local = normalizeDeck(localDeck);
+  const remote = normalizeDeck(remoteDeck);
+  const mergedSpaces = [];
+  const remoteById = new Map(remote.spaces.map((space) => [space.id, space]));
+  const seenSpaceIds = new Set();
+
+  for (const localSpace of local.spaces) {
+    const remoteSpace = remoteById.get(localSpace.id);
+
+    if (remoteSpace) {
+      const mergedCollections = mergeSpaceCollections(localSpace, remoteSpace);
+      mergedSpaces.push({
+        id: localSpace.id,
+        name: localSpace.name || remoteSpace.name || "Workspace",
+        createdAt: localSpace.createdAt || remoteSpace.createdAt || nowIso(),
+        collections: mergedCollections
+      });
+      seenSpaceIds.add(localSpace.id);
+      continue;
+    }
+
+    mergedSpaces.push({
+      id: localSpace.id,
+      name: localSpace.name || "Workspace",
+      createdAt: localSpace.createdAt || nowIso(),
+      collections: (localSpace.collections || []).map(cloneCollection)
+    });
+    seenSpaceIds.add(localSpace.id);
+  }
+
+  for (const remoteSpace of remote.spaces) {
+    if (!seenSpaceIds.has(remoteSpace.id)) {
+      mergedSpaces.push({
+        id: remoteSpace.id,
+        name: remoteSpace.name || "Workspace",
+        createdAt: remoteSpace.createdAt || nowIso(),
+        collections: (remoteSpace.collections || []).map(cloneCollection)
+      });
+    }
+  }
+
+  const activeSpaceId =
+    mergedSpaces.some((space) => space.id === local.activeSpaceId)
+      ? local.activeSpaceId
+      : mergedSpaces.some((space) => space.id === remote.activeSpaceId)
+        ? remote.activeSpaceId
+        : mergedSpaces[0]?.id;
+
+  const mergedRecentlyDeleted = normalizeRecentlyDeleted([
+    ...(local.settings?.recentlyDeleted || []),
+    ...(remote.settings?.recentlyDeleted || [])
+  ]).sort((a, b) => safeTs(b.deletedAt) - safeTs(a.deletedAt));
+
+  return normalizeDeck({
+    version: 1,
+    updatedAt: chooseLaterTimestamp(local.updatedAt, remote.updatedAt),
+    activeSpaceId,
+    settings: {
+      theme: local.settings?.theme || remote.settings?.theme || "system",
+      recentlyDeleted: mergedRecentlyDeleted
+    },
+    spaces: mergedSpaces
+  });
 }
 
 export async function loadDeck() {
@@ -369,14 +560,12 @@ async function loadCloudDeck() {
         return normalizeDeck(localDeck);
       }
 
-      const localUpdatedAt = Date.parse(localDeck.updatedAt || "");
-      const remoteUpdatedAt = Date.parse(remoteDeck.updatedAt || "");
-
-      if (localUpdatedAt > remoteUpdatedAt + 1000) {
-        await pushDeckToCloud(localDeck);
-        setCloudStatus("Supabase cloud sync is active.");
-        return normalizeDeck(localDeck);
-      }
+      const mergedDeck = mergeDecks(localDeck, remoteDeck);
+      await writeLocalDeck(mergedDeck);
+      await pushDeckToCloud(mergedDeck);
+      await clearPendingCloudDeck();
+      setCloudStatus("Supabase cloud sync is active. Merged local and cloud changes.");
+      return mergedDeck;
     }
 
     if (remoteDeck) {

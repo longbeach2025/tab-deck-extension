@@ -145,6 +145,15 @@ h3 {
   margin: 22px 0;
 }
 
+.search-filters {
+  display: grid;
+  gap: 8px;
+}
+
+.search-filters .secondary-button {
+  width: 100%;
+}
+
 .search-wrap input,
 input,
 select,
@@ -214,7 +223,8 @@ textarea {
 
 .space-list,
 .live-tabs,
-.link-list {
+.link-list,
+.deleted-list {
   display: grid;
   gap: 8px;
 }
@@ -507,6 +517,70 @@ textarea {
   background: var(--panel);
 }
 
+.search-results {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 14px;
+}
+
+.search-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.search-results-list {
+  display: grid;
+  gap: 8px;
+}
+
+.search-result-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 8px;
+}
+
+.search-result-main {
+  min-width: 0;
+}
+
+.search-result-main a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.search-result-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+mark {
+  background: rgba(255, 206, 84, 0.5);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
 .empty-state {
   display: grid;
   justify-items: start;
@@ -516,6 +590,32 @@ textarea {
 
 .compact {
   padding: 8px 0;
+}
+
+.deleted-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 8px;
+}
+
+.deleted-item .deleted-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deleted-item .deleted-meta {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .popup-shell {
