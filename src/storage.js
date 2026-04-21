@@ -1,5 +1,6 @@
 import {
   fetchCloudDeck,
+  formatCloudError,
   isCloudConfigured,
   isCloudReady,
   pushDeckToCloud,
@@ -171,7 +172,7 @@ export async function saveDeck(deck) {
       return lastStorageStatus;
     } catch (error) {
       await queuePendingCloudDeck(normalized);
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = formatCloudError(error);
       lastStorageStatus = {
         mode: "cloud",
         synced: false,
@@ -186,7 +187,7 @@ export async function saveDeck(deck) {
     await writeSyncDeck(normalized);
     setSyncStatus("Chrome sync is active.");
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = formatCloudError(error);
     lastStorageStatus = {
       mode: "local",
       synced: false,
@@ -226,7 +227,7 @@ async function readSyncDeck() {
     setSyncStatus("Chrome sync is active.");
     return normalizeDeck(JSON.parse(payload));
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = formatCloudError(error);
     lastStorageStatus = {
       mode: "local",
       synced: false,
@@ -358,7 +359,7 @@ async function loadCloudDeck() {
     setCloudStatus("Supabase cloud sync is active.");
     return normalizeDeck(deck);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = formatCloudError(error);
     lastStorageStatus = {
       mode: "cloud",
       synced: false,

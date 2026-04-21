@@ -15,6 +15,7 @@ import {
 import {
   getCloudConfig,
   getCloudUser,
+  formatCloudError,
   saveCloudConfig,
   signInCloud,
   signOutCloud,
@@ -607,7 +608,7 @@ async function runCloudAction(action) {
     render();
     finalMessage = message || "";
   } catch (error) {
-    finalMessage = error instanceof Error ? error.message : String(error);
+    finalMessage = formatCloudError(error);
     isWarning = true;
   } finally {
     setCloudBusy(false);

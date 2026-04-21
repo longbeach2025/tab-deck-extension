@@ -115,6 +115,32 @@ export async function signOutCloud() {
   await supabase.auth.signOut();
 }
 
+export function formatCloudError(error) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const fields = ["message", "code", "details", "hint", "statusText"];
+    const parts = fields
+      .map((field) => [field, error[field]])
+      .filter(([, value]) => value)
+      .map(([field, value]) => `${field}: ${value}`);
+
+    if (parts.length > 0) {
+      return parts.join("; ");
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "Unknown cloud error object.";
+    }
+  }
+
+  return String(error);
+}
+
 export async function isCloudReady() {
   try {
     return Boolean(await getCloudUser());
@@ -208,27 +234,26 @@ export async function pushDeckToCloud(deck) {
 
   await markDeletedRows(supabase, user.id, payload, now);
 
-  const upserts = [
+  await throwIfSupabaseError(
     supabase.from(TABLES.settings).upsert(payload.settings, { onConflict: "user_id" })
-  ];
+  );
 
   if (payload.spaces.length > 0) {
-    upserts.push(supabase.from(TABLES.spaces).upsert(payload.spaces, { onConflict: "id" }));
+    await throwIfSupabaseError(
+      supabase.from(TABLES.spaces).upsert(payload.spaces, { onConflict: "id" })
+    );
   }
 
   if (payload.collections.length > 0) {
-    upserts.push(supabase.from(TABLES.collections).upsert(payload.collections, { onConflict: "id" }));
+    await throwIfSupabaseError(
+      supabase.from(TABLES.collections).upsert(payload.collections, { onConflict: "id" })
+    );
   }
 
   if (payload.links.length > 0) {
-    upserts.push(supabase.from(TABLES.links).upsert(payload.links, { onConflict: "id" }));
-  }
-
-  const results = await Promise.all(upserts);
-  const failed = results.find((result) => result.error);
-
-  if (failed) {
-    throw failed.error;
+    await throwIfSupabaseError(
+      supabase.from(TABLES.links).upsert(payload.links, { onConflict: "id" })
+    );
   }
 
   await clearPendingCloudDeck();
@@ -283,6 +308,16 @@ async function getRequiredUser() {
 function resetClient() {
   client = null;
   clientSignature = "";
+}
+
+async function throwIfSupabaseError(request) {
+  const result = await request;
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return result;
 }
 
 function groupBy(rows, key) {
