@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "./vendor/supabase-js.js";
 
 const CLOUD_CONFIG_KEY = "tabDeckCloudConfig";
 const CLOUD_PENDING_DECK_KEY = "tabDeckPendingCloudDeck";
@@ -8,6 +8,7 @@ const TABLES = {
   collections: "tab_deck_collections",
   links: "tab_deck_links"
 };
+const CLOUD_PAGE_SIZE = 1000;
 
 let client;
 let clientSignature = "";
@@ -153,45 +154,45 @@ export async function fetchCloudDeck() {
   const supabase = await getRequiredClient();
   const user = await getRequiredUser();
 
-  const [settingsResult, spacesResult, collectionsResult, linksResult] = await Promise.all([
+  const [settingsResult, spaces, collections, links] = await Promise.all([
     supabase.from(TABLES.settings).select("*").eq("user_id", user.id).maybeSingle(),
-    supabase
-      .from(TABLES.spaces)
-      .select("*")
-      .eq("user_id", user.id)
-      .is("deleted_at", null)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true }),
-    supabase
-      .from(TABLES.collections)
-      .select("*")
-      .eq("user_id", user.id)
-      .is("deleted_at", null)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true }),
-    supabase
-      .from(TABLES.links)
-      .select("*")
-      .eq("user_id", user.id)
-      .is("deleted_at", null)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true })
+    fetchAllRows(() =>
+      supabase
+        .from(TABLES.spaces)
+        .select("*")
+        .eq("user_id", user.id)
+        .is("deleted_at", null)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true })
+    ),
+    fetchAllRows(() =>
+      supabase
+        .from(TABLES.collections)
+        .select("*")
+        .eq("user_id", user.id)
+        .is("deleted_at", null)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true })
+    ),
+    fetchAllRows(() =>
+      supabase
+        .from(TABLES.links)
+        .select("*")
+        .eq("user_id", user.id)
+        .is("deleted_at", null)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true })
+    )
   ]);
 
-  for (const result of [settingsResult, spacesResult, collectionsResult, linksResult]) {
-    if (result.error) {
-      throw result.error;
-    }
+  if (settingsResult.error) {
+    throw settingsResult.error;
   }
-
-  const spaces = spacesResult.data || [];
 
   if (spaces.length === 0) {
     return null;
   }
 
-  const collections = collectionsResult.data || [];
-  const links = linksResult.data || [];
   const collectionsBySpace = groupBy(collections, "space_id");
   const linksByCollection = groupBy(links, "collection_id");
   const deckSpaces = spaces.map((space) => ({
@@ -431,24 +432,45 @@ function flattenDeck(deck, userId, timestamp) {
 
 async function markDeletedRows(supabase, userId, payload, timestamp) {
   const [remoteSpaces, remoteCollections, remoteLinks] = await Promise.all([
-    supabase.from(TABLES.spaces).select("id").eq("user_id", userId).is("deleted_at", null),
-    supabase.from(TABLES.collections).select("id").eq("user_id", userId).is("deleted_at", null),
-    supabase.from(TABLES.links).select("id").eq("user_id", userId).is("deleted_at", null)
+    fetchAllRows(() => supabase.from(TABLES.spaces).select("id").eq("user_id", userId).is("deleted_at", null).order("id")),
+    fetchAllRows(() =>
+      supabase.from(TABLES.collections).select("id").eq("user_id", userId).is("deleted_at", null).order("id")
+    ),
+    fetchAllRows(() => supabase.from(TABLES.links).select("id").eq("user_id", userId).is("deleted_at", null).order("id"))
   ]);
 
-  for (const result of [remoteSpaces, remoteCollections, remoteLinks]) {
-    if (result.error) {
-      throw result.error;
-    }
-  }
-
   const deletes = [
-    markDeletedForTable(supabase, TABLES.links, userId, remoteLinks.data || [], payload.links, timestamp),
-    markDeletedForTable(supabase, TABLES.collections, userId, remoteCollections.data || [], payload.collections, timestamp),
-    markDeletedForTable(supabase, TABLES.spaces, userId, remoteSpaces.data || [], payload.spaces, timestamp)
+    markDeletedForTable(supabase, TABLES.links, userId, remoteLinks, payload.links, timestamp),
+    markDeletedForTable(supabase, TABLES.collections, userId, remoteCollections, payload.collections, timestamp),
+    markDeletedForTable(supabase, TABLES.spaces, userId, remoteSpaces, payload.spaces, timestamp)
   ];
 
   await Promise.all(deletes);
+}
+
+async function fetchAllRows(buildQuery) {
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + CLOUD_PAGE_SIZE - 1;
+    const { data, error } = await buildQuery().range(from, to);
+
+    if (error) {
+      throw error;
+    }
+
+    const page = Array.isArray(data) ? data : [];
+    rows.push(...page);
+
+    if (page.length < CLOUD_PAGE_SIZE) {
+      break;
+    }
+
+    from += CLOUD_PAGE_SIZE;
+  }
+
+  return rows;
 }
 
 async function markDeletedForTable(supabase, table, userId, remoteRows, localRows, timestamp) {

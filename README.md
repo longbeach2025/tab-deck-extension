@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.20`
+- 开发版：`v0.2.0-alpha.21`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.20` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.20/tab-deck-extension-v0.2.0-alpha.20.zip)
+- [`v0.2.0-alpha.21` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.21/tab-deck-extension-v0.2.0-alpha.21.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.20`）
+## 核心功能（截至 `v0.2.0-alpha.21`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -41,7 +41,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - Toby 导入数据标记时间来源（`Imported time`），避免误认为原始创建时间。
   - 展示层不再对每条 URL 显示 `Exact time` 徽标，避免时间语义噪音。
 - AI 中文摘要（可选）：
-  - Collection 卡片 `G` 按钮可调用 LLM 生成中文 `Title + Notes` 建议。
+  - Collection 卡片 `G` 按钮可调用 LLM 生成更可读的中文 `Notes`。
   - 先预览再确认应用，不会静默覆盖。
   - 侧栏 `AI Notes` 固定预设：`OpenAI / MiniMax Intl`，其余走 `Custom`。
   - 支持 AI 开关（禁用后 `G` 按钮自动不可用）。
@@ -105,7 +105,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.20`。
+2. 安装 `v0.2.0-alpha.21`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -282,6 +282,16 @@ alter table public.tab_deck_links
   - `G` 按钮在 AI 生成期间进入 busy 状态并禁止重复触发。
 - AI 总结行为调整：
   - AI 只生成并更新 `Notes`，不再修改 Collection `Title`。
+
+### `v0.2.0-alpha.21` (Supabase Full Fetch Fix)
+
+- 修复 Supabase 拉取上限导致的数据不完整：
+  - `spaces / collections / links` 改为分页全量拉取（每页 1000）。
+  - 避免超过 1000 行时只同步到部分数据（例如 Toby 大批量导入后只显示部分链接）。
+- 修复删除对账的分页一致性：
+  - 远端 ID 列表改为分页全量读取后再比对，避免单页截断引发误判删除。
+- 兼容 Chrome 扩展模块解析：
+  - `@supabase/supabase-js` 改为本地 vendor 文件引用，避免加载 unpacked 时出现模块解析错误。
 
 ## 构建与打包
 
