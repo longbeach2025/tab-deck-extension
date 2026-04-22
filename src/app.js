@@ -29,11 +29,11 @@ let deck;
 let liveTabs = [];
 let selectedTabIds = new Set();
 let query = "";
+let aiEnabled = true;
 const searchFilters = {
   spaceId: "all",
   collection: "",
   host: "",
-  timeSource: "all",
   dateFrom: "",
   dateTo: "",
   sortBy: "recent_activity"
@@ -51,6 +51,7 @@ const AUTO_SAVE_DEFAULT_CONFIG = {
 };
 const DEFAULT_AI_CONFIG = {
   provider: "openai",
+  enabled: true,
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-4.1-mini"
@@ -68,6 +69,7 @@ const AI_PROVIDER_PRESETS = {
 
 const elements = {
   deckStats: document.querySelector("#deckStats"),
+  systemActionStatus: document.querySelector("#systemActionStatus"),
   cloudStatus: document.querySelector("#cloudStatus"),
   cloudUrlInput: document.querySelector("#cloudUrlInput"),
   cloudAnonKeyInput: document.querySelector("#cloudAnonKeyInput"),
@@ -86,6 +88,7 @@ const elements = {
   exportDeckButton: document.querySelector("#exportDeckButton"),
   importDeckButton: document.querySelector("#importDeckButton"),
   importDeckInput: document.querySelector("#importDeckInput"),
+  aiEnabledToggle: document.querySelector("#aiEnabledToggle"),
   aiProviderSelect: document.querySelector("#aiProviderSelect"),
   aiBaseUrlInput: document.querySelector("#aiBaseUrlInput"),
   aiApiKeyInput: document.querySelector("#aiApiKeyInput"),
@@ -95,7 +98,6 @@ const elements = {
   searchSpaceFilter: document.querySelector("#searchSpaceFilter"),
   searchCollectionFilter: document.querySelector("#searchCollectionFilter"),
   searchHostFilter: document.querySelector("#searchHostFilter"),
-  searchTimeSourceFilter: document.querySelector("#searchTimeSourceFilter"),
   searchDateFrom: document.querySelector("#searchDateFrom"),
   searchDateTo: document.querySelector("#searchDateTo"),
   searchSortSelect: document.querySelector("#searchSortSelect"),
@@ -159,11 +161,6 @@ function bindEvents() {
     renderCollections();
     renderSearchResults();
   });
-  elements.searchTimeSourceFilter.addEventListener("change", (event) => {
-    searchFilters.timeSource = event.target.value || "all";
-    renderCollections();
-    renderSearchResults();
-  });
   elements.searchDateFrom.addEventListener("change", (event) => {
     searchFilters.dateFrom = event.target.value;
     renderCollections();
@@ -200,6 +197,7 @@ function bindEvents() {
   elements.exportDeckButton.addEventListener("click", exportDeckBackup);
   elements.importDeckButton.addEventListener("click", () => elements.importDeckInput.click());
   elements.importDeckInput.addEventListener("change", importDeckBackup);
+  elements.aiEnabledToggle.addEventListener("change", saveAiConfig);
   elements.aiProviderSelect.addEventListener("change", onAiProviderChanged);
   elements.saveAiConfigButton.addEventListener("click", saveAiConfig);
 }
@@ -262,7 +260,7 @@ function renderStats() {
   elements.deckStats.title = status.message;
 
   if (elements.cloudStatus) {
-    elements.cloudStatus.textContent = status.message;
+    elements.cloudStatus.textContent = `Sync status: ${status.message}`;
     elements.cloudStatus.classList.toggle("warning", !status.synced);
   }
 
@@ -282,15 +280,19 @@ async function renderCloudControls() {
 
 async function renderAiControls() {
   const config = await getAiConfig();
+  aiEnabled = config.enabled;
+  elements.aiEnabledToggle.checked = config.enabled;
   elements.aiProviderSelect.value = config.provider;
   elements.aiBaseUrlInput.value = config.baseUrl;
   elements.aiApiKeyInput.value = config.apiKey;
   elements.aiModelInput.value = config.model;
   applyAiProviderUi(config.provider);
+  renderCollections();
 }
 
 async function saveAiConfig() {
   const config = normalizeAiConfig({
+    enabled: elements.aiEnabledToggle.checked,
     provider: elements.aiProviderSelect.value,
     baseUrl: elements.aiBaseUrlInput.value,
     apiKey: elements.aiApiKeyInput.value,
@@ -299,7 +301,7 @@ async function saveAiConfig() {
 
   await chrome.storage.local.set({ [AI_CONFIG_KEY]: config });
   await renderAiControls();
-  showCloudMessage("AI config saved.");
+  showCloudMessage("AI config saved successfully.");
 }
 
 function onAiProviderChanged() {
@@ -486,7 +488,6 @@ function renderSearchFilters() {
   elements.searchSpaceFilter.value = searchFilters.spaceId;
   elements.searchCollectionFilter.value = searchFilters.collection;
   elements.searchHostFilter.value = searchFilters.host;
-  elements.searchTimeSourceFilter.value = searchFilters.timeSource;
   elements.searchDateFrom.value = searchFilters.dateFrom;
   elements.searchDateTo.value = searchFilters.dateTo;
   elements.searchSortSelect.value = searchFilters.sortBy;
@@ -497,7 +498,6 @@ function isSearchActive() {
     query ||
     searchFilters.collection ||
     searchFilters.host ||
-    searchFilters.timeSource !== "all" ||
     searchFilters.dateFrom ||
     searchFilters.dateTo ||
     searchFilters.spaceId !== "all"
@@ -558,15 +558,13 @@ function renderSearchResults() {
     const info = document.createElement("div");
     info.className = "search-result-meta";
     const activityLabel = formatDateTimeLabel(getItemActivityIso(result.item));
-    const timeSourceLabel = formatTimeSourceLabel(result.item.timeAccuracy);
     applyHighlightedText(
       info,
       `${result.spaceName} / ${result.collectionName} · ${getHost(result.item.url)} · Added ${formatDateLabel(
         result.item.addedAt
-      )} · Active ${activityLabel} · ${timeSourceLabel}`,
+      )} · Active ${activityLabel}`,
       query
     );
-    info.title = getTimeSourceDescription(result.item.timeAccuracy);
 
     main.append(link, info);
 
@@ -699,7 +697,14 @@ function renderCollectionCard(space, collection, visibleItems) {
   card.dataset.collectionId = collection.id;
   nameInput.value = collection.name;
   notesInput.value = collection.notes;
+  suggestSummaryButton.disabled = !aiEnabled;
+  suggestSummaryButton.title = aiEnabled ? "Generate Chinese notes" : "Enable AI notes first";
   openAllButton.disabled = collection.items.length === 0;
+
+  const collectionMeta = document.createElement("p");
+  collectionMeta.className = "collection-meta";
+  collectionMeta.textContent = `Created ${formatDateTimeLabel(collection.createdAt)} · ${collection.items.length} links`;
+  card.insertBefore(collectionMeta, dropZone);
 
   if (isAutoSavedCollection(collection)) {
     card.classList.add("collection-card-auto");
@@ -799,12 +804,7 @@ function renderLinkRow(space, item, collection) {
   host.className = "tab-host";
   applyHighlightedText(host, getHost(item.url), query);
 
-  const trace = document.createElement("span");
-  trace.className = `time-source-badge ${item.timeAccuracy || "exact"}`;
-  trace.textContent = formatTimeSourceLabel(item.timeAccuracy);
-  trace.title = getTimeSourceDescription(item.timeAccuracy);
-
-  text.append(title, host, trace);
+  text.append(title, host);
   link.append(icon, text);
 
   const removeButton = document.createElement("button");
@@ -880,10 +880,6 @@ function isItemMatchFilters(collection, item, space = getActiveSpace(deck)) {
   }
 
   if (searchFilters.host && !host.includes(searchFilters.host)) {
-    return false;
-  }
-
-  if (searchFilters.timeSource !== "all" && (item.timeAccuracy || "exact") !== searchFilters.timeSource) {
     return false;
   }
 
@@ -1001,30 +997,6 @@ function formatDateLabel(value) {
   }
 
   return new Date(ts).toLocaleDateString();
-}
-
-function formatTimeSourceLabel(timeAccuracy) {
-  if (timeAccuracy === "imported") {
-    return "Imported time";
-  }
-
-  if (timeAccuracy === "estimated") {
-    return "Estimated time";
-  }
-
-  return "Exact time";
-}
-
-function getTimeSourceDescription(timeAccuracy) {
-  if (timeAccuracy === "imported") {
-    return "Time is from import timestamp, not original creation time.";
-  }
-
-  if (timeAccuracy === "estimated") {
-    return "Time is estimated from available data.";
-  }
-
-  return "Time is captured from direct action in Tab Deck.";
 }
 
 async function moveSearchResult(result) {
@@ -1429,6 +1401,11 @@ async function openCollection(collection) {
 }
 
 async function suggestCollectionTitleAndNotes(collection) {
+  if (!aiEnabled) {
+    showCloudMessage("AI notes generation is disabled. Enable it first.");
+    return;
+  }
+
   if (!Array.isArray(collection.items) || collection.items.length < 2) {
     showCloudMessage("至少需要 2 条链接才能生成中文摘要。", true);
     return;
@@ -1678,8 +1655,9 @@ async function runCloudAction(action) {
 }
 
 function showCloudMessage(message, isWarning = false) {
-  elements.cloudStatus.textContent = message;
-  elements.cloudStatus.classList.toggle("warning", isWarning);
+  const stamp = new Date().toLocaleTimeString();
+  elements.systemActionStatus.textContent = `${message} (${stamp})`;
+  elements.systemActionStatus.classList.toggle("warning", isWarning);
 }
 
 function renderCloudDetails() {
@@ -1769,12 +1747,14 @@ async function getAutoSaveMeta() {
 
 function normalizeAiConfig(rawConfig) {
   const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  const enabled = typeof next.enabled === "boolean" ? next.enabled : DEFAULT_AI_CONFIG.enabled;
   const provider = next.provider === "minimax" || next.provider === "custom" ? next.provider : "openai";
   const baseUrl = String(next.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim().replace(/\/$/, "");
   const apiKey = String(next.apiKey || "").trim();
   const model = String(next.model || DEFAULT_AI_CONFIG.model).trim();
 
   return {
+    enabled,
     provider,
     baseUrl: baseUrl || DEFAULT_AI_CONFIG.baseUrl,
     apiKey,
@@ -1791,14 +1771,12 @@ function clearSearchFilters() {
   searchFilters.spaceId = "all";
   searchFilters.collection = "";
   searchFilters.host = "";
-  searchFilters.timeSource = "all";
   searchFilters.dateFrom = "";
   searchFilters.dateTo = "";
   searchFilters.sortBy = "recent_activity";
   elements.searchSpaceFilter.value = "all";
   elements.searchCollectionFilter.value = "";
   elements.searchHostFilter.value = "";
-  elements.searchTimeSourceFilter.value = "all";
   elements.searchDateFrom.value = "";
   elements.searchDateTo.value = "";
   elements.searchSortSelect.value = "recent_activity";

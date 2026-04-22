@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.18</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.19</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -29,12 +29,6 @@
         </select>
         <input id="searchCollectionFilter" type="search" placeholder="Filter collection">
         <input id="searchHostFilter" type="search" placeholder="Filter host">
-        <select id="searchTimeSourceFilter" aria-label="Filter time source">
-          <option value="all">Time source: All</option>
-          <option value="exact">Time source: Exact</option>
-          <option value="imported">Time source: Imported</option>
-          <option value="estimated">Time source: Estimated</option>
-        </select>
         <input id="searchDateFrom" type="date" aria-label="Filter from date">
         <input id="searchDateTo" type="date" aria-label="Filter to date">
         <select id="searchSortSelect" aria-label="Search sort">
@@ -45,21 +39,23 @@
         <button id="clearSearchFiltersButton" class="secondary-button">Clear filters</button>
       </div>
 
-      <div class="side-section cloud-section">
+      <div class="side-section status-section">
         <div class="section-title">
-          <span>Cloud Sync</span>
-          <button id="syncNowButton" class="icon-button" title="Sync now" aria-label="Sync now">S</button>
+          <span>Status Center</span>
         </div>
-        <p id="cloudStatus" class="cloud-status">Checking cloud status</p>
+        <p id="systemActionStatus" class="cloud-status">Ready.</p>
+        <p id="cloudStatus" class="cloud-meta">Sync status: Checking cloud status</p>
         <p id="cloudMode" class="cloud-meta">Backend: Chrome sync</p>
         <p id="cloudSignedIn" class="cloud-meta">Signed in as: Not signed in</p>
         <p id="cloudLastSynced" class="cloud-meta">Last synced: Never</p>
         <p id="cloudPending" class="cloud-meta">Pending local changes: No</p>
         <p id="cloudErrorDetails" class="cloud-meta warning hidden">Cloud error details: None</p>
-        <div class="cloud-fields">
-          <input id="cloudUrlInput" type="url" placeholder="Supabase project URL">
-          <input id="cloudAnonKeyInput" type="password" placeholder="Supabase publishable / anon key">
-          <button id="saveCloudConfigButton" class="secondary-button">Save config</button>
+      </div>
+
+      <div class="side-section cloud-section">
+        <div class="section-title">
+          <span>Account & Sync</span>
+          <button id="syncNowButton" class="icon-button" title="Sync now" aria-label="Sync now">S</button>
         </div>
         <div class="cloud-fields">
           <input id="cloudEmailInput" type="email" placeholder="Email">
@@ -69,6 +65,11 @@
             <button id="signUpCloudButton" class="secondary-button">Sign up</button>
           </div>
           <button id="signOutCloudButton" class="ghost-button">Sign out</button>
+        </div>
+        <div class="cloud-fields">
+          <input id="cloudUrlInput" type="url" placeholder="Supabase project URL">
+          <input id="cloudAnonKeyInput" type="password" placeholder="Supabase publishable / anon key">
+          <button id="saveCloudConfigButton" class="secondary-button">Save config</button>
         </div>
       </div>
 
@@ -88,6 +89,10 @@
           <span>AI Notes</span>
         </div>
         <div class="cloud-fields">
+          <label class="check-row">
+            <input id="aiEnabledToggle" type="checkbox">
+            <span>Enable AI notes generation</span>
+          </label>
           <select id="aiProviderSelect" aria-label="AI provider">
             <option value="openai">Provider: OpenAI</option>
             <option value="minimax">Provider: MiniMax Intl</option>
@@ -190,7 +195,7 @@
             <button class="icon-button delete-collection" title="Delete collection" aria-label="Delete collection">D</button>
           </div>
         </div>
-        <textarea class="collection-notes" rows="2" placeholder="Notes"></textarea>
+        <textarea class="collection-notes" rows="5" placeholder="Notes"></textarea>
         <div class="drop-zone">Drop a current tab here</div>
         <div class="link-list"></div>
       </article>

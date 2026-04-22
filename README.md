@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.18`
+- 开发版：`v0.2.0-alpha.19`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.18` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.18/tab-deck-extension-v0.2.0-alpha.18.zip)
+- [`v0.2.0-alpha.19` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.19/tab-deck-extension-v0.2.0-alpha.19.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.18`）
+## 核心功能（截至 `v0.2.0-alpha.19`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -39,13 +39,17 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 - 时间可追溯：
   - link 记录 `addedAt / lastModifiedAt / lastOpenedAt`。
   - Toby 导入数据标记时间来源（`Imported time`），避免误认为原始创建时间。
-  - 搜索支持 `Time source` 过滤与 `Recent activity` 排序。
+  - 展示层不再对每条 URL 显示 `Exact time` 徽标，避免时间语义噪音。
 - AI 中文摘要（可选）：
   - Collection 卡片 `G` 按钮可调用 LLM 生成中文 `Title + Notes` 建议。
   - 先预览再确认应用，不会静默覆盖。
   - 侧栏 `AI Notes` 固定预设：`OpenAI / MiniMax Intl`，其余走 `Custom`。
+  - 支持 AI 开关（禁用后 `G` 按钮自动不可用）。
   - 按所选 Provider 填写 API Base URL / API Key / Model 即可使用。
   - 默认已包含 `https://api.openai.com/*` 和 `https://api.minimax.io/*` host 权限；若使用其他 API 域名，需在 `manifest.json` 增加对应 host 权限后重载扩展。
+- 左侧布局优化：
+  - 新增统一 `Status Center` 展示动作反馈、同步状态和错误信息。
+  - `Save AI config` 会在状态区给出明确成功提示（附时间）。
 
 ## 安装方式
 
@@ -101,7 +105,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.18`。
+2. 安装 `v0.2.0-alpha.19`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -257,6 +261,19 @@ alter table public.tab_deck_links
   - 选择预设时自动填充默认 Base URL / Model，降低配置成本。
 - 新增 MiniMax 官方域名权限：
   - `https://api.minimax.io/*`
+
+### `v0.2.0-alpha.19` (Sidebar & Notes UX)
+
+- Collection Notes 可读性优化：
+  - Notes 输入区增大并提升排版可读性。
+  - Collection 卡片新增创建时间与链接数量元信息。
+- 时间展示降噪：
+  - 移除每条 URL 的 `Exact/Imported` 徽标展示。
+  - 同步移除 `Time source` 搜索筛选项，避免使用成本。
+- 左侧布局重排与状态统一：
+  - 新增 `Status Center` 统一显示动作反馈、同步状态、错误信息。
+  - `Save AI config` 保存后提供明确成功提示（带时间戳）。
+  - 新增 AI 总开关，关闭后 `G` 按钮自动禁用。
 
 ## 构建与打包
 
