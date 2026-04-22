@@ -36,6 +36,14 @@ const searchFilters = {
 };
 const MAX_RECENTLY_DELETED = 50;
 const MAX_TOMBSTONES = 500;
+const AUTO_SAVE_COLLECTION_NAME = "Auto Saved";
+const AUTO_SAVE_CONFIG_KEY = "tabDeckAutoSaveConfig";
+const AUTO_SAVE_META_KEY = "tabDeckAutoSaveMeta";
+const AUTO_SAVE_INTERVAL_OPTIONS = [3, 5, 10, 15];
+const AUTO_SAVE_DEFAULT_CONFIG = {
+  enabled: true,
+  intervalMinutes: 3
+};
 
 const elements = {
   deckStats: document.querySelector("#deckStats"),
@@ -66,6 +74,9 @@ const elements = {
   spaceList: document.querySelector("#spaceList"),
   addSpaceButton: document.querySelector("#addSpaceButton"),
   refreshTabsButton: document.querySelector("#refreshTabsButton"),
+  autoSaveEnabledToggle: document.querySelector("#autoSaveEnabledToggle"),
+  autoSaveIntervalSelect: document.querySelector("#autoSaveIntervalSelect"),
+  autoSaveLastCaptured: document.querySelector("#autoSaveLastCaptured"),
   selectAllTabs: document.querySelector("#selectAllTabs"),
   saveSelectedButton: document.querySelector("#saveSelectedButton"),
   saveAllButton: document.querySelector("#saveAllButton"),
@@ -94,6 +105,7 @@ async function init() {
   bindStorageSyncEvents();
   render();
   await renderCloudControls();
+  await renderAutoSaveControls();
 }
 
 function bindEvents() {
@@ -126,6 +138,8 @@ function bindEvents() {
 
   elements.addSpaceButton.addEventListener("click", addSpace);
   elements.refreshTabsButton.addEventListener("click", refreshAndRenderLiveTabs);
+  elements.autoSaveEnabledToggle.addEventListener("change", saveAutoSaveControls);
+  elements.autoSaveIntervalSelect.addEventListener("change", saveAutoSaveControls);
   elements.clearDeletedButton.addEventListener("click", clearRecentlyDeleted);
   elements.selectAllTabs.addEventListener("change", toggleAllCurrentTabs);
   elements.saveSelectedButton.addEventListener("click", saveSelectedTabs);
@@ -146,12 +160,14 @@ function bindEvents() {
 
 function bindStorageSyncEvents() {
   chrome.storage.onChanged.addListener(async (changes, areaName) => {
-    if (!isDeckStorageChange(areaName, changes)) {
-      return;
+    if (isDeckStorageChange(areaName, changes)) {
+      deck = await loadDeck();
+      render();
     }
 
-    deck = await loadDeck();
-    render();
+    if (areaName === "local" && (changes[AUTO_SAVE_CONFIG_KEY] || changes[AUTO_SAVE_META_KEY])) {
+      await renderAutoSaveControls();
+    }
   });
 }
 
@@ -329,7 +345,8 @@ function renderCollections() {
     }))
     .filter(({ collection, items }) => {
       return isCollectionMatchFilters(activeSpace, collection) || items.length > 0;
-    });
+    })
+    .sort((a, b) => Number(isAutoSavedCollection(b.collection)) - Number(isAutoSavedCollection(a.collection)));
 
   elements.emptyState.classList.toggle("hidden", activeSpace.collections.length > 0);
 
@@ -545,6 +562,8 @@ function renderRecentlyDeleted() {
 function renderCollectionCard(space, collection, visibleItems) {
   const fragment = elements.collectionTemplate.content.cloneNode(true);
   const card = fragment.querySelector(".collection-card");
+  const top = fragment.querySelector(".collection-top");
+  const actions = fragment.querySelector(".collection-actions");
   const nameInput = fragment.querySelector(".collection-name");
   const notesInput = fragment.querySelector(".collection-notes");
   const openAllButton = fragment.querySelector(".open-all");
@@ -559,6 +578,20 @@ function renderCollectionCard(space, collection, visibleItems) {
   nameInput.value = collection.name;
   notesInput.value = collection.notes;
   openAllButton.disabled = collection.items.length === 0;
+
+  if (isAutoSavedCollection(collection)) {
+    card.classList.add("collection-card-auto");
+
+    const badge = document.createElement("span");
+    badge.className = "collection-badge";
+    badge.textContent = "AUTO";
+    top.insertBefore(badge, actions);
+
+    const meta = document.createElement("p");
+    meta.className = "collection-system-meta";
+    meta.textContent = `Background capture · Last update ${formatDateTimeLabel(collection.updatedAt)}`;
+    card.insertBefore(meta, notesInput);
+  }
 
   nameInput.addEventListener("change", async () => {
     collection.name = nameInput.value.trim() || "Untitled";
@@ -793,6 +826,19 @@ function applyHighlightedText(node, text, keyword) {
 function toTimestamp(value) {
   const parsed = Date.parse(value || "");
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatDateTimeLabel(value) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) {
+    return "Unknown";
+  }
+
+  return new Date(ts).toLocaleString();
 }
 
 function formatDateLabel(value) {
@@ -1304,9 +1350,71 @@ function renderCloudDetails() {
   }
 }
 
+async function renderAutoSaveControls() {
+  const [config, meta] = await Promise.all([getAutoSaveConfig(), getAutoSaveMeta()]);
+
+  elements.autoSaveEnabledToggle.checked = config.enabled;
+  elements.autoSaveIntervalSelect.value = String(config.intervalMinutes);
+  elements.autoSaveIntervalSelect.disabled = !config.enabled;
+  elements.autoSaveLastCaptured.textContent = `Last auto save: ${
+    meta.lastCapturedAt ? new Date(meta.lastCapturedAt).toLocaleString() : "Never"
+  }`;
+}
+
+async function saveAutoSaveControls() {
+  const config = normalizeAutoSaveConfig({
+    enabled: elements.autoSaveEnabledToggle.checked,
+    intervalMinutes: Number(elements.autoSaveIntervalSelect.value)
+  });
+
+  await chrome.storage.local.set({
+    [AUTO_SAVE_CONFIG_KEY]: config
+  });
+
+  await renderAutoSaveControls();
+  showCloudMessage(config.enabled ? `Background auto-save is on (${config.intervalMinutes} min).` : "Background auto-save is off.");
+}
+
 function clearSearch() {
   query = "";
   elements.searchInput.value = "";
+}
+
+function isAutoSavedCollection(collection) {
+  return (collection.name || "").trim().toLowerCase() === AUTO_SAVE_COLLECTION_NAME.toLowerCase();
+}
+
+function normalizeAutoSaveConfig(rawConfig) {
+  const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  const parsedInterval = Number(next.intervalMinutes);
+  const intervalMinutes = AUTO_SAVE_INTERVAL_OPTIONS.includes(parsedInterval)
+    ? parsedInterval
+    : AUTO_SAVE_DEFAULT_CONFIG.intervalMinutes;
+
+  return {
+    enabled: typeof next.enabled === "boolean" ? next.enabled : AUTO_SAVE_DEFAULT_CONFIG.enabled,
+    intervalMinutes
+  };
+}
+
+async function getAutoSaveConfig() {
+  const result = await chrome.storage.local.get(AUTO_SAVE_CONFIG_KEY);
+  return normalizeAutoSaveConfig(result[AUTO_SAVE_CONFIG_KEY]);
+}
+
+async function getAutoSaveMeta() {
+  const result = await chrome.storage.local.get(AUTO_SAVE_META_KEY);
+  const meta = result[AUTO_SAVE_META_KEY];
+
+  if (!meta || typeof meta !== "object") {
+    return {
+      lastCapturedAt: ""
+    };
+  }
+
+  return {
+    lastCapturedAt: meta.lastCapturedAt || ""
+  };
 }
 
 function clearSearchFilters() {

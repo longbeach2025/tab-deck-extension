@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.11`
+- 开发版：`v0.2.0-alpha.12`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.11` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.11/tab-deck-extension-v0.2.0-alpha.11.zip)
+- [`v0.2.0-alpha.12` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.12/tab-deck-extension-v0.2.0-alpha.12.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.11`）
+## 核心功能（截至 `v0.2.0-alpha.12`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -85,7 +85,7 @@ alter table public.tab_deck_user_settings
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.11`。
+2. 安装 `v0.2.0-alpha.12`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -182,6 +182,17 @@ alter table public.tab_deck_user_settings
   - 引入删除墓碑（tombstone）机制，删除 collection/link 会写入可同步的删除标记。
   - merge 时先应用 tombstone，再合并数据，防止旧设备把已删除数据重新推回云端。
   - 恢复 Recently Deleted 项目时会自动移除对应 tombstone，确保恢复行为可同步。
+
+### `v0.2.0-alpha.12`
+
+- 新增后台静默自动保存：
+  - 引入 `background service worker` + `chrome.alarms`，可在不打断用户的情况下周期保存标签页。
+  - 自动保存内容写入 `Auto Saved` 集合，按 URL 去重并限制历史条数，避免无上限增长。
+- 新增自动保存可视化配置：
+  - 在侧栏增加 `Silent Auto Save` 控制区，支持开启/关闭和频次选择（3/5/10/15 分钟）。
+  - 显示最近一次自动保存时间，便于确认后台任务状态。
+- 工作区视觉区分自动保存内容：
+  - `Auto Saved` 集合增加 `AUTO` 标识、系统元信息和差异化样式，和手工保存集合可直观区分。
 
 ## 构建与打包
 

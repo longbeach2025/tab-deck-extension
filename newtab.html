@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.11</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.12</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -97,6 +97,26 @@
           <span>Close after save</span>
         </label>
         <div id="liveTabs" class="live-tabs"></div>
+      </div>
+
+      <div class="side-section auto-save-section">
+        <div class="section-title">
+          <span>Silent Auto Save</span>
+        </div>
+        <div class="auto-save-config">
+          <label class="check-row">
+            <input id="autoSaveEnabledToggle" type="checkbox">
+            <span>Enable background auto-save</span>
+          </label>
+          <label class="field-label auto-save-label" for="autoSaveIntervalSelect">Save frequency</label>
+          <select id="autoSaveIntervalSelect">
+            <option value="3">Every 3 minutes</option>
+            <option value="5">Every 5 minutes</option>
+            <option value="10">Every 10 minutes</option>
+            <option value="15">Every 15 minutes</option>
+          </select>
+          <p id="autoSaveLastCaptured" class="cloud-meta">Last auto save: Never</p>
+        </div>
       </div>
 
       <div class="side-section">

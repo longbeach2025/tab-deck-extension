@@ -271,6 +271,22 @@ textarea {
   padding: 12px;
 }
 
+.auto-save-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 12px;
+}
+
+.auto-save-config {
+  display: grid;
+  gap: 8px;
+}
+
+.auto-save-label {
+  margin: 0;
+}
+
 .cloud-status {
   margin-bottom: 10px;
   color: var(--muted);
@@ -467,7 +483,23 @@ textarea {
   gap: 10px;
 }
 
+.collection-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
 .collection-name {
+  flex: 1;
+  min-width: 0;
   min-height: 38px;
   border: 0;
   padding: 0;
@@ -478,6 +510,21 @@ textarea {
 
 .collection-notes {
   background: var(--panel-strong);
+}
+
+.collection-system-meta {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.collection-card-auto {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.collection-card-auto .drop-zone {
+  border-color: var(--accent);
 }
 
 .add-link-form {
