@@ -14,6 +14,11 @@ const SYNC_CHUNK_PREFIX = "tabDeckSyncChunk_";
 const SYNC_CHUNK_SIZE = 7000;
 const SYNC_SOFT_LIMIT_BYTES = 90000;
 const MAX_TOMBSTONES = 500;
+const TIME_ACCURACY_LEVEL = {
+  imported: 1,
+  estimated: 2,
+  exact: 3
+};
 
 const DEFAULT_STATUS = {
   mode: "sync",
@@ -31,6 +36,28 @@ export function makeId(prefix = "id") {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeTimeAccuracy(value) {
+  if (value === "exact" || value === "estimated" || value === "imported") {
+    return value;
+  }
+
+  return "exact";
+}
+
+function normalizeSource(value) {
+  if (value === "manual" || value === "toby_export" || value === "imported_backup") {
+    return value;
+  }
+
+  return "manual";
+}
+
+function pickTimeAccuracy(a, b) {
+  const aNormalized = normalizeTimeAccuracy(a);
+  const bNormalized = normalizeTimeAccuracy(b);
+  return (TIME_ACCURACY_LEVEL[aNormalized] || 0) >= (TIME_ACCURACY_LEVEL[bNormalized] || 0) ? aNormalized : bNormalized;
 }
 
 function defaultDeck() {
@@ -58,6 +85,11 @@ function defaultDeck() {
             notes: "",
             createdAt: nowIso(),
             updatedAt: nowIso(),
+            lastModifiedAt: nowIso(),
+            source: "manual",
+            timeAccuracy: "exact",
+            importedAt: "",
+            importBatchId: "",
             items: []
           }
         ]
@@ -91,7 +123,12 @@ function normalizeDeck(deck) {
             name: collection.name || "Untitled",
             notes: collection.notes || "",
             createdAt: collection.createdAt || nowIso(),
-            updatedAt: collection.updatedAt || nowIso(),
+            updatedAt: chooseLaterTimestamp(collection.updatedAt, collection.lastModifiedAt),
+            lastModifiedAt: collection.lastModifiedAt || collection.updatedAt || nowIso(),
+            source: normalizeSource(collection.source),
+            timeAccuracy: normalizeTimeAccuracy(collection.timeAccuracy),
+            importedAt: collection.importedAt || "",
+            importBatchId: collection.importBatchId || "",
             items: Array.isArray(collection.items)
               ? collection.items
                   .filter((item) => item && item.url)
@@ -100,9 +137,15 @@ function normalizeDeck(deck) {
                     title: item.title || item.url,
                     url: item.url,
                     favIconUrl: compactFavIconUrl(item.favIconUrl),
-                    addedAt: item.addedAt || nowIso()
+                    addedAt: item.addedAt || nowIso(),
+                    lastModifiedAt: item.lastModifiedAt || item.addedAt || nowIso(),
+                    lastOpenedAt: item.lastOpenedAt || "",
+                    source: normalizeSource(item.source),
+                    timeAccuracy: normalizeTimeAccuracy(item.timeAccuracy),
+                    importedAt: item.importedAt || "",
+                    importBatchId: item.importBatchId || ""
                   }))
-              : []
+            : []
           }))
         : []
     }))
@@ -202,6 +245,17 @@ function chooseLaterTimestamp(a, b) {
   return safeTs(a) >= safeTs(b) ? (a || b || nowIso()) : (b || a || nowIso());
 }
 
+function chooseLaterOptionalTimestamp(a, b) {
+  const aTs = safeTs(a);
+  const bTs = safeTs(b);
+
+  if (!aTs && !bTs) {
+    return "";
+  }
+
+  return aTs >= bTs ? (a || b || "") : (b || a || "");
+}
+
 function cloneCollection(collection) {
   return {
     id: collection.id,
@@ -209,13 +263,24 @@ function cloneCollection(collection) {
     notes: collection.notes,
     createdAt: collection.createdAt,
     updatedAt: collection.updatedAt,
+    lastModifiedAt: collection.lastModifiedAt,
+    source: collection.source,
+    timeAccuracy: collection.timeAccuracy,
+    importedAt: collection.importedAt || "",
+    importBatchId: collection.importBatchId || "",
     items: Array.isArray(collection.items)
       ? collection.items.map((item) => ({
           id: item.id,
           title: item.title,
           url: item.url,
           favIconUrl: compactFavIconUrl(item.favIconUrl),
-          addedAt: item.addedAt
+          addedAt: item.addedAt,
+          lastModifiedAt: item.lastModifiedAt,
+          lastOpenedAt: item.lastOpenedAt || "",
+          source: item.source,
+          timeAccuracy: item.timeAccuracy,
+          importedAt: item.importedAt || "",
+          importBatchId: item.importBatchId || ""
         }))
       : []
   };
@@ -239,7 +304,13 @@ function mergeItems(localItems, remoteItems) {
         title: item.title || item.url || "Untitled",
         url: item.url,
         favIconUrl: compactFavIconUrl(item.favIconUrl),
-        addedAt: item.addedAt || nowIso()
+        addedAt: item.addedAt || nowIso(),
+        lastModifiedAt: item.lastModifiedAt || item.addedAt || nowIso(),
+        lastOpenedAt: item.lastOpenedAt || "",
+        source: normalizeSource(item.source),
+        timeAccuracy: normalizeTimeAccuracy(item.timeAccuracy),
+        importedAt: item.importedAt || "",
+        importBatchId: item.importBatchId || ""
       });
       continue;
     }
@@ -250,7 +321,16 @@ function mergeItems(localItems, remoteItems) {
       title: newer.title || existing.title || newer.url || "Untitled",
       url: newer.url || existing.url,
       favIconUrl: compactFavIconUrl(newer.favIconUrl) || compactFavIconUrl(existing.favIconUrl),
-      addedAt: chooseLaterTimestamp(newer.addedAt, existing.addedAt)
+      addedAt: chooseLaterTimestamp(newer.addedAt, existing.addedAt),
+      lastModifiedAt: chooseLaterTimestamp(newer.lastModifiedAt, existing.lastModifiedAt),
+      lastOpenedAt: chooseLaterOptionalTimestamp(newer.lastOpenedAt, existing.lastOpenedAt),
+      source:
+        pickTimeAccuracy(newer.timeAccuracy, existing.timeAccuracy) === normalizeTimeAccuracy(newer.timeAccuracy)
+          ? normalizeSource(newer.source)
+          : normalizeSource(existing.source),
+      timeAccuracy: pickTimeAccuracy(newer.timeAccuracy, existing.timeAccuracy),
+      importedAt: chooseLaterOptionalTimestamp(newer.importedAt, existing.importedAt),
+      importBatchId: newer.importBatchId || existing.importBatchId || ""
     });
   }
 
@@ -265,6 +345,15 @@ function mergeCollections(localCollection, remoteCollection) {
     notes: preferred.notes || "",
     createdAt: localCollection.createdAt || remoteCollection.createdAt || nowIso(),
     updatedAt: chooseLaterTimestamp(localCollection.updatedAt, remoteCollection.updatedAt),
+    lastModifiedAt: chooseLaterTimestamp(localCollection.lastModifiedAt, remoteCollection.lastModifiedAt),
+    source:
+      pickTimeAccuracy(localCollection.timeAccuracy, remoteCollection.timeAccuracy) ===
+      normalizeTimeAccuracy(localCollection.timeAccuracy)
+        ? normalizeSource(localCollection.source)
+        : normalizeSource(remoteCollection.source),
+    timeAccuracy: pickTimeAccuracy(localCollection.timeAccuracy, remoteCollection.timeAccuracy),
+    importedAt: chooseLaterOptionalTimestamp(localCollection.importedAt, remoteCollection.importedAt),
+    importBatchId: localCollection.importBatchId || remoteCollection.importBatchId || "",
     items: mergeItems(localCollection.items || [], remoteCollection.items || [])
   };
 }
@@ -736,23 +825,36 @@ export function getActiveSpace(deck) {
 }
 
 export function createCollection(name, items = []) {
+  const timestamp = nowIso();
   return {
     id: makeId("collection"),
     name: name || "Untitled",
     notes: "",
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastModifiedAt: timestamp,
+    source: "manual",
+    timeAccuracy: "exact",
+    importedAt: "",
+    importBatchId: "",
     items
   };
 }
 
 export function tabToItem(tab) {
+  const timestamp = nowIso();
   return {
     id: makeId("link"),
     title: tab.title || tab.url || "Untitled",
     url: tab.url,
     favIconUrl: compactFavIconUrl(tab.favIconUrl),
-    addedAt: nowIso()
+    addedAt: timestamp,
+    lastModifiedAt: timestamp,
+    lastOpenedAt: "",
+    source: "manual",
+    timeAccuracy: "exact",
+    importedAt: "",
+    importBatchId: ""
   };
 }
 
@@ -871,6 +973,7 @@ function parseTobyImportObject(parsed) {
 
 export function buildSpaceFromTobyImport(tobyImport, spaceName = "") {
   const importedAt = nowIso();
+  const importBatchId = makeId("toby_batch");
   const resolvedName = spaceName?.trim() || `Toby Import ${new Date(importedAt).toLocaleDateString()}`;
 
   return {
@@ -883,12 +986,23 @@ export function buildSpaceFromTobyImport(tobyImport, spaceName = "") {
       notes: collection.notes,
       createdAt: importedAt,
       updatedAt: importedAt,
+      lastModifiedAt: importedAt,
+      source: "toby_export",
+      timeAccuracy: "imported",
+      importedAt,
+      importBatchId,
       items: collection.items.map((item) => ({
         id: makeId("link"),
         title: item.title || item.url,
         url: item.url,
         favIconUrl: "",
-        addedAt: importedAt
+        addedAt: importedAt,
+        lastModifiedAt: importedAt,
+        lastOpenedAt: "",
+        source: "toby_export",
+        timeAccuracy: "imported",
+        importedAt,
+        importBatchId
       }))
     }))
   };

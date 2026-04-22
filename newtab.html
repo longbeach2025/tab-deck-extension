@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.13</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.15</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -29,7 +29,19 @@
         </select>
         <input id="searchCollectionFilter" type="search" placeholder="Filter collection">
         <input id="searchHostFilter" type="search" placeholder="Filter host">
+        <select id="searchTimeSourceFilter" aria-label="Filter time source">
+          <option value="all">Time source: All</option>
+          <option value="exact">Time source: Exact</option>
+          <option value="imported">Time source: Imported</option>
+          <option value="estimated">Time source: Estimated</option>
+        </select>
         <input id="searchDateFrom" type="date" aria-label="Filter from date">
+        <input id="searchDateTo" type="date" aria-label="Filter to date">
+        <select id="searchSortSelect" aria-label="Search sort">
+          <option value="recent_activity">Sort: Recent activity</option>
+          <option value="recent_added">Sort: Recently added</option>
+          <option value="oldest_added">Sort: Oldest added</option>
+        </select>
         <button id="clearSearchFiltersButton" class="secondary-button">Clear filters</button>
       </div>
 
@@ -156,6 +168,7 @@
         <div class="collection-top">
           <input class="collection-name" type="text">
           <div class="collection-actions">
+            <button class="icon-button suggest-summary" title="Suggest title and notes" aria-label="Suggest title and notes">G</button>
             <button class="icon-button open-all" title="Open all links" aria-label="Open all links">O</button>
             <button class="icon-button delete-collection" title="Delete collection" aria-label="Delete collection">D</button>
           </div>

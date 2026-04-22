@@ -204,12 +204,23 @@ export async function fetchCloudDeck() {
       notes: collection.notes || "",
       createdAt: toIso(collection.created_at),
       updatedAt: toIso(collection.updated_at),
+      lastModifiedAt: toIso(collection.updated_at),
+      source: collection.metadata?.source || "manual",
+      timeAccuracy: collection.metadata?.timeAccuracy || "exact",
+      importedAt: collection.metadata?.importedAt || "",
+      importBatchId: collection.metadata?.importBatchId || "",
       items: (linksByCollection.get(collection.id) || []).map((link) => ({
         id: link.id,
         title: link.title,
         url: link.url,
         favIconUrl: link.fav_icon_url || "",
-        addedAt: toIso(link.created_at)
+        addedAt: toIso(link.created_at),
+        lastModifiedAt: toIso(link.updated_at || link.created_at),
+        lastOpenedAt: link.metadata?.lastOpenedAt || "",
+        source: link.metadata?.source || "manual",
+        timeAccuracy: link.metadata?.timeAccuracy || "exact",
+        importedAt: link.metadata?.importedAt || "",
+        importBatchId: link.metadata?.importBatchId || ""
       }))
     }))
   }));
@@ -381,7 +392,13 @@ function flattenDeck(deck, userId, timestamp) {
         notes: collection.notes || "",
         sort_order: collectionIndex,
         created_at: collection.createdAt || timestamp,
-        updated_at: timestamp,
+        updated_at: collection.lastModifiedAt || collection.updatedAt || timestamp,
+        metadata: {
+          source: collection.source || "manual",
+          timeAccuracy: collection.timeAccuracy || "exact",
+          importedAt: collection.importedAt || "",
+          importBatchId: collection.importBatchId || ""
+        },
         deleted_at: null
       });
 
@@ -395,7 +412,14 @@ function flattenDeck(deck, userId, timestamp) {
           fav_icon_url: item.favIconUrl || "",
           sort_order: itemIndex,
           created_at: item.addedAt || timestamp,
-          updated_at: timestamp,
+          updated_at: item.lastOpenedAt || item.lastModifiedAt || item.addedAt || timestamp,
+          metadata: {
+            source: item.source || "manual",
+            timeAccuracy: item.timeAccuracy || "exact",
+            importedAt: item.importedAt || "",
+            importBatchId: item.importBatchId || "",
+            lastOpenedAt: item.lastOpenedAt || ""
+          },
           deleted_at: null
         });
       });

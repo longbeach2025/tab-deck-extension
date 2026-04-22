@@ -35,6 +35,7 @@ create table if not exists public.tab_deck_collections (
   space_id text not null references public.tab_deck_spaces(id) on delete cascade,
   name text not null,
   notes text not null default '',
+  metadata jsonb not null default '{}'::jsonb,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -48,11 +49,18 @@ create table if not exists public.tab_deck_links (
   title text not null,
   url text not null,
   fav_icon_url text not null default '',
+  metadata jsonb not null default '{}'::jsonb,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   deleted_at timestamptz
 );
+
+alter table public.tab_deck_collections
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
+
+alter table public.tab_deck_links
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
 
 alter table public.tab_deck_user_settings enable row level security;
 alter table public.tab_deck_spaces enable row level security;

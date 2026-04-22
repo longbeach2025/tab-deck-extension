@@ -132,6 +132,35 @@ h3 {
   color: var(--muted);
 }
 
+.time-source-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--panel-strong);
+}
+
+.time-source-badge.imported {
+  border-color: #c49a3a;
+  color: #8d6a17;
+}
+
+.time-source-badge.estimated {
+  border-color: #6087b8;
+  color: #365f91;
+}
+
+.time-source-badge.exact {
+  border-color: #3e8d63;
+  color: #276445;
+}
+
 .brand-row p,
 .popup-header p,
 .tab-host,

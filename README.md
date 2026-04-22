@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.13`
+- 开发版：`v0.2.0-alpha.15`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.13` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.13/tab-deck-extension-v0.2.0-alpha.13.zip)
+- [`v0.2.0-alpha.15` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.15/tab-deck-extension-v0.2.0-alpha.15.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.13`）
+## 核心功能（截至 `v0.2.0-alpha.15`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -36,6 +36,10 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - JSON 导入恢复（支持 Tab Deck 备份 + Toby 导出 JSON）。
 - 状态可视化：
   - 当前登录账号、最近同步时间、待同步本地变更、错误详情。
+- 时间可追溯：
+  - link 记录 `addedAt / lastModifiedAt / lastOpenedAt`。
+  - Toby 导入数据标记时间来源（`Imported time`），避免误认为原始创建时间。
+  - 搜索支持 `Time source` 过滤与 `Recent activity` 排序。
 
 ## 安装方式
 
@@ -78,6 +82,12 @@ alter table public.tab_deck_user_settings
 
 alter table public.tab_deck_user_settings
   add column if not exists tombstones jsonb not null default '[]'::jsonb;
+
+alter table public.tab_deck_collections
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
+
+alter table public.tab_deck_links
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
 ```
 
 ### 扩展端配置
@@ -85,7 +95,7 @@ alter table public.tab_deck_user_settings
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.13`。
+2. 安装 `v0.2.0-alpha.15`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -207,6 +217,18 @@ alter table public.tab_deck_user_settings
   - `Import JSON / Toby` 自动识别导入来源（Tab Deck 备份 / Toby 导出 JSON）。
   - Toby 导入会创建新 Space 并写入所有可保存链接，不覆盖现有 Space。
   - 导入时对无效 URL 过滤，并在 collection 内按 URL 去重。
+
+### `v0.2.0-alpha.15`
+
+- 时间可追溯增强（全链路）：
+  - collection/link 增加时间来源元数据（`source / timeAccuracy / importedAt / importBatchId`）。
+  - Toby 导入数据明确标记为 `Imported time`，避免误解为原始创建时间。
+  - 搜索新增 `Time source` 过滤，结果默认支持按 `Recent activity` 排序。
+- Collection 智能摘要生成（本地规则版）：
+  - 卡片新增 `Suggest title and notes` 按钮（`G`）。
+  - 基于列表内链接的标题与域名统计，自动生成建议标题与 Notes 并写回当前 collection。
+- Supabase 同步兼容扩展：
+  - `tab_deck_collections` / `tab_deck_links` 新增 `metadata` JSONB，用于同步时间来源相关字段。
 
 ## 构建与打包
 

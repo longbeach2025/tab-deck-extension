@@ -142,7 +142,9 @@ async function runCapture(reason) {
 
   autoSaveCollection.items.unshift(...newItems);
   autoSaveCollection.items = autoSaveCollection.items.slice(0, AUTO_SAVE_COLLECTION_MAX_ITEMS);
-  autoSaveCollection.updatedAt = new Date().toISOString();
+  const modifiedAt = new Date().toISOString();
+  autoSaveCollection.updatedAt = modifiedAt;
+  autoSaveCollection.lastModifiedAt = modifiedAt;
 
   await saveDeck(deck);
   await writeAutoSaveMeta(signature, reason);

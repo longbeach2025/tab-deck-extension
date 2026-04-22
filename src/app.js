@@ -33,7 +33,10 @@ const searchFilters = {
   spaceId: "all",
   collection: "",
   host: "",
-  dateFrom: ""
+  timeSource: "all",
+  dateFrom: "",
+  dateTo: "",
+  sortBy: "recent_activity"
 };
 const MAX_RECENTLY_DELETED = 50;
 const MAX_TOMBSTONES = 500;
@@ -45,6 +48,39 @@ const AUTO_SAVE_DEFAULT_CONFIG = {
   enabled: true,
   intervalMinutes: 3
 };
+const TITLE_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "your",
+  "you",
+  "are",
+  "was",
+  "were",
+  "have",
+  "has",
+  "had",
+  "will",
+  "would",
+  "could",
+  "should",
+  "about",
+  "into",
+  "http",
+  "https",
+  "www",
+  "com",
+  "net",
+  "org",
+  "html",
+  "php",
+  "amp",
+  "news"
+]);
 
 const elements = {
   deckStats: document.querySelector("#deckStats"),
@@ -70,7 +106,10 @@ const elements = {
   searchSpaceFilter: document.querySelector("#searchSpaceFilter"),
   searchCollectionFilter: document.querySelector("#searchCollectionFilter"),
   searchHostFilter: document.querySelector("#searchHostFilter"),
+  searchTimeSourceFilter: document.querySelector("#searchTimeSourceFilter"),
   searchDateFrom: document.querySelector("#searchDateFrom"),
+  searchDateTo: document.querySelector("#searchDateTo"),
+  searchSortSelect: document.querySelector("#searchSortSelect"),
   clearSearchFiltersButton: document.querySelector("#clearSearchFiltersButton"),
   spaceList: document.querySelector("#spaceList"),
   addSpaceButton: document.querySelector("#addSpaceButton"),
@@ -130,9 +169,23 @@ function bindEvents() {
     renderCollections();
     renderSearchResults();
   });
+  elements.searchTimeSourceFilter.addEventListener("change", (event) => {
+    searchFilters.timeSource = event.target.value || "all";
+    renderCollections();
+    renderSearchResults();
+  });
   elements.searchDateFrom.addEventListener("change", (event) => {
     searchFilters.dateFrom = event.target.value;
     renderCollections();
+    renderSearchResults();
+  });
+  elements.searchDateTo.addEventListener("change", (event) => {
+    searchFilters.dateTo = event.target.value;
+    renderCollections();
+    renderSearchResults();
+  });
+  elements.searchSortSelect.addEventListener("change", (event) => {
+    searchFilters.sortBy = event.target.value || "recent_activity";
     renderSearchResults();
   });
   elements.clearSearchFiltersButton.addEventListener("click", clearSearchFilters);
@@ -388,11 +441,22 @@ function renderSearchFilters() {
   elements.searchSpaceFilter.value = searchFilters.spaceId;
   elements.searchCollectionFilter.value = searchFilters.collection;
   elements.searchHostFilter.value = searchFilters.host;
+  elements.searchTimeSourceFilter.value = searchFilters.timeSource;
   elements.searchDateFrom.value = searchFilters.dateFrom;
+  elements.searchDateTo.value = searchFilters.dateTo;
+  elements.searchSortSelect.value = searchFilters.sortBy;
 }
 
 function isSearchActive() {
-  return !!(query || searchFilters.collection || searchFilters.host || searchFilters.dateFrom || searchFilters.spaceId !== "all");
+  return !!(
+    query ||
+    searchFilters.collection ||
+    searchFilters.host ||
+    searchFilters.timeSource !== "all" ||
+    searchFilters.dateFrom ||
+    searchFilters.dateTo ||
+    searchFilters.spaceId !== "all"
+  );
 }
 
 function renderSearchResults() {
@@ -440,19 +504,24 @@ function renderSearchResults() {
     const link = document.createElement("a");
     link.href = result.item.url;
     link.title = result.item.url;
-    link.addEventListener("click", (event) => {
+    link.addEventListener("click", async (event) => {
       event.preventDefault();
-      chrome.tabs.create({ url: result.item.url });
+      await openItem(result.item);
     });
     applyHighlightedText(link, result.item.title || result.item.url, query);
 
     const info = document.createElement("div");
     info.className = "search-result-meta";
+    const activityLabel = formatDateTimeLabel(getItemActivityIso(result.item));
+    const timeSourceLabel = formatTimeSourceLabel(result.item.timeAccuracy);
     applyHighlightedText(
       info,
-      `${result.spaceName} / ${result.collectionName} · ${getHost(result.item.url)} · ${formatDateLabel(result.item.addedAt)}`,
+      `${result.spaceName} / ${result.collectionName} · ${getHost(result.item.url)} · Added ${formatDateLabel(
+        result.item.addedAt
+      )} · Active ${activityLabel} · ${timeSourceLabel}`,
       query
     );
+    info.title = getTimeSourceDescription(result.item.timeAccuracy);
 
     main.append(link, info);
 
@@ -465,7 +534,9 @@ function renderSearchResults() {
     openButton.title = "Open result";
     openButton.setAttribute("aria-label", "Open result");
     openButton.textContent = "O";
-    openButton.addEventListener("click", () => chrome.tabs.create({ url: result.item.url }));
+    openButton.addEventListener("click", async () => {
+      await openItem(result.item);
+    });
 
     const moveButton = document.createElement("button");
     moveButton.className = "icon-button";
@@ -512,7 +583,14 @@ function buildSearchResults() {
     }
   }
 
-  results.sort((a, b) => toTimestamp(b.item.addedAt) - toTimestamp(a.item.addedAt));
+  if (searchFilters.sortBy === "recent_added") {
+    results.sort((a, b) => toTimestamp(b.item.addedAt) - toTimestamp(a.item.addedAt));
+  } else if (searchFilters.sortBy === "oldest_added") {
+    results.sort((a, b) => toTimestamp(a.item.addedAt) - toTimestamp(b.item.addedAt));
+  } else {
+    results.sort((a, b) => getItemActivityTimestamp(b.item) - getItemActivityTimestamp(a.item));
+  }
+
   return results;
 }
 
@@ -568,6 +646,7 @@ function renderCollectionCard(space, collection, visibleItems) {
   const nameInput = fragment.querySelector(".collection-name");
   const notesInput = fragment.querySelector(".collection-notes");
   const openAllButton = fragment.querySelector(".open-all");
+  const suggestSummaryButton = fragment.querySelector(".suggest-summary");
   const deleteButton = fragment.querySelector(".delete-collection");
   const form = fragment.querySelector(".add-link-form");
   const titleInput = fragment.querySelector(".link-title-input");
@@ -596,17 +675,20 @@ function renderCollectionCard(space, collection, visibleItems) {
 
   nameInput.addEventListener("change", async () => {
     collection.name = nameInput.value.trim() || "Untitled";
-    collection.updatedAt = new Date().toISOString();
+    touchCollectionModified(collection);
     await persistAndRender();
   });
 
   notesInput.addEventListener("change", async () => {
     collection.notes = notesInput.value.trim();
-    collection.updatedAt = new Date().toISOString();
+    touchCollectionModified(collection);
     await persistAndRender();
   });
 
   openAllButton.addEventListener("click", () => openCollection(collection));
+  suggestSummaryButton.addEventListener("click", async () => {
+    await suggestCollectionTitleAndNotes(collection);
+  });
   deleteButton.addEventListener("click", () => deleteCollection(collection.id));
 
   form.addEventListener("submit", async (event) => {
@@ -618,14 +700,21 @@ function renderCollectionCard(space, collection, visibleItems) {
       return;
     }
 
+    const addedAt = getNowIso();
     collection.items.unshift({
       id: makeId("link"),
       title: titleInput.value.trim() || getHost(url),
       url,
       favIconUrl: "",
-      addedAt: new Date().toISOString()
+      addedAt,
+      lastModifiedAt: addedAt,
+      lastOpenedAt: "",
+      source: "manual",
+      timeAccuracy: "exact",
+      importedAt: "",
+      importBatchId: ""
     });
-    collection.updatedAt = new Date().toISOString();
+    touchCollectionModified(collection);
     titleInput.value = "";
     urlInput.value = "";
     await persistAndRender();
@@ -675,9 +764,9 @@ function renderLinkRow(space, item, collection) {
   const link = document.createElement("a");
   link.href = item.url;
   link.title = item.url;
-  link.addEventListener("click", (event) => {
+  link.addEventListener("click", async (event) => {
     event.preventDefault();
-    chrome.tabs.create({ url: item.url });
+    await openItem(item);
   });
 
   const icon = document.createElement("img");
@@ -697,7 +786,12 @@ function renderLinkRow(space, item, collection) {
   host.className = "tab-host";
   applyHighlightedText(host, getHost(item.url), query);
 
-  text.append(title, host);
+  const trace = document.createElement("span");
+  trace.className = `time-source-badge ${item.timeAccuracy || "exact"}`;
+  trace.textContent = formatTimeSourceLabel(item.timeAccuracy);
+  trace.title = getTimeSourceDescription(item.timeAccuracy);
+
+  text.append(title, host, trace);
   link.append(icon, text);
 
   const removeButton = document.createElement("button");
@@ -716,7 +810,13 @@ function renderLinkRow(space, item, collection) {
         title: item.title,
         url: item.url,
         favIconUrl: item.favIconUrl || "",
-        addedAt: item.addedAt
+        addedAt: item.addedAt,
+        lastModifiedAt: item.lastModifiedAt || "",
+        lastOpenedAt: item.lastOpenedAt || "",
+        source: item.source || "manual",
+        timeAccuracy: item.timeAccuracy || "exact",
+        importedAt: item.importedAt || "",
+        importBatchId: item.importBatchId || ""
       }
     });
     addTombstone({
@@ -726,7 +826,7 @@ function renderLinkRow(space, item, collection) {
       url: item.url
     });
     collection.items = collection.items.filter((candidate) => candidate.id !== item.id);
-    collection.updatedAt = new Date().toISOString();
+    touchCollectionModified(collection);
     await persistAndRender();
   });
 
@@ -757,8 +857,9 @@ function isCollectionMatchFilters(space, collection) {
 
 function isItemMatchFilters(collection, item, space = getActiveSpace(deck)) {
   const host = getHost(item.url || "").toLowerCase();
-  const addedAt = toTimestamp(item.addedAt);
+  const activityTs = getItemActivityTimestamp(item);
   const searchDateFromTs = searchFilters.dateFrom ? Date.parse(`${searchFilters.dateFrom}T00:00:00`) : 0;
+  const searchDateToTs = searchFilters.dateTo ? Date.parse(`${searchFilters.dateTo}T23:59:59.999`) : 0;
   const inSelectedSpace = searchFilters.spaceId === "all" || searchFilters.spaceId === space.id;
 
   if (!inSelectedSpace) {
@@ -769,11 +870,19 @@ function isItemMatchFilters(collection, item, space = getActiveSpace(deck)) {
     return false;
   }
 
+  if (searchFilters.timeSource !== "all" && (item.timeAccuracy || "exact") !== searchFilters.timeSource) {
+    return false;
+  }
+
   if (searchFilters.collection && !collection.name.toLowerCase().includes(searchFilters.collection)) {
     return false;
   }
 
-  if (searchDateFromTs && addedAt < searchDateFromTs) {
+  if (searchDateFromTs && activityTs < searchDateFromTs) {
+    return false;
+  }
+
+  if (searchDateToTs && activityTs > searchDateToTs) {
     return false;
   }
 
@@ -829,6 +938,32 @@ function toTimestamp(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function getNowIso() {
+  return new Date().toISOString();
+}
+
+function getItemActivityTimestamp(item) {
+  return Math.max(toTimestamp(item.lastOpenedAt), toTimestamp(item.lastModifiedAt), toTimestamp(item.addedAt));
+}
+
+function getItemActivityIso(item) {
+  const ts = getItemActivityTimestamp(item);
+  return ts > 0 ? new Date(ts).toISOString() : "";
+}
+
+function touchCollectionModified(collection, timestamp = getNowIso()) {
+  collection.updatedAt = timestamp;
+  collection.lastModifiedAt = timestamp;
+}
+
+function touchItemModified(item, timestamp = getNowIso()) {
+  item.lastModifiedAt = timestamp;
+}
+
+function touchItemOpened(item, timestamp = getNowIso()) {
+  item.lastOpenedAt = timestamp;
+}
+
 function formatDateTimeLabel(value) {
   if (!value) {
     return "Unknown";
@@ -853,6 +988,30 @@ function formatDateLabel(value) {
   }
 
   return new Date(ts).toLocaleDateString();
+}
+
+function formatTimeSourceLabel(timeAccuracy) {
+  if (timeAccuracy === "imported") {
+    return "Imported time";
+  }
+
+  if (timeAccuracy === "estimated") {
+    return "Estimated time";
+  }
+
+  return "Exact time";
+}
+
+function getTimeSourceDescription(timeAccuracy) {
+  if (timeAccuracy === "imported") {
+    return "Time is from import timestamp, not original creation time.";
+  }
+
+  if (timeAccuracy === "estimated") {
+    return "Time is estimated from available data.";
+  }
+
+  return "Time is captured from direct action in Tab Deck.";
 }
 
 async function moveSearchResult(result) {
@@ -892,11 +1051,12 @@ async function moveSearchResult(result) {
   sourceCollection.items = sourceCollection.items.filter((candidate) => candidate.id !== item.id);
 
   if (!existsInTarget) {
+    touchItemModified(item);
     targetCollection.items.unshift(item);
-    targetCollection.updatedAt = new Date().toISOString();
+    touchCollectionModified(targetCollection);
   }
 
-  sourceCollection.updatedAt = new Date().toISOString();
+  touchCollectionModified(sourceCollection);
   await persistAndRender();
 }
 
@@ -983,12 +1143,23 @@ async function deleteCollection(collectionId) {
       notes: collection.notes,
       createdAt: collection.createdAt,
       updatedAt: collection.updatedAt,
+      lastModifiedAt: collection.lastModifiedAt || collection.updatedAt,
+      source: collection.source || "manual",
+      timeAccuracy: collection.timeAccuracy || "exact",
+      importedAt: collection.importedAt || "",
+      importBatchId: collection.importBatchId || "",
       items: collection.items.map((item) => ({
         id: item.id,
         title: item.title,
         url: item.url,
         favIconUrl: item.favIconUrl || "",
-        addedAt: item.addedAt
+        addedAt: item.addedAt,
+        lastModifiedAt: item.lastModifiedAt || "",
+        lastOpenedAt: item.lastOpenedAt || "",
+        source: item.source || "manual",
+        timeAccuracy: item.timeAccuracy || "exact",
+        importedAt: item.importedAt || "",
+        importBatchId: item.importBatchId || ""
       }))
     }
   });
@@ -1089,13 +1260,23 @@ async function restoreDeletedEntry(entryId) {
     const restoredCollection = {
       ...entry.collection,
       id: collectionIdInUse ? makeId("collection") : entry.collection.id,
+      source: entry.collection.source || "manual",
+      timeAccuracy: entry.collection.timeAccuracy || "exact",
+      importedAt: entry.collection.importedAt || "",
+      importBatchId: entry.collection.importBatchId || "",
       items: Array.isArray(entry.collection.items)
         ? entry.collection.items.map((item) => ({
             id: item.id,
             title: item.title,
             url: item.url,
             favIconUrl: item.favIconUrl || "",
-            addedAt: item.addedAt
+            addedAt: item.addedAt,
+            lastModifiedAt: item.lastModifiedAt || "",
+            lastOpenedAt: item.lastOpenedAt || "",
+            source: item.source || "manual",
+            timeAccuracy: item.timeAccuracy || "exact",
+            importedAt: item.importedAt || "",
+            importBatchId: item.importBatchId || ""
           }))
         : []
     };
@@ -1123,9 +1304,15 @@ async function restoreDeletedEntry(entryId) {
         title: entry.link.title || entry.link.url,
         url: entry.link.url,
         favIconUrl: entry.link.favIconUrl || "",
-        addedAt: entry.link.addedAt || new Date().toISOString()
+        addedAt: entry.link.addedAt || getNowIso(),
+        lastModifiedAt: entry.link.lastModifiedAt || entry.link.addedAt || getNowIso(),
+        lastOpenedAt: entry.link.lastOpenedAt || "",
+        source: entry.link.source || "manual",
+        timeAccuracy: entry.link.timeAccuracy || "exact",
+        importedAt: entry.link.importedAt || "",
+        importBatchId: entry.link.importBatchId || ""
       });
-      targetCollection.updatedAt = new Date().toISOString();
+      touchCollectionModified(targetCollection);
     }
 
     removeTombstone({
@@ -1206,7 +1393,7 @@ async function addTabsToCollection(tabs, collection, options = {}) {
     .map(tabToItem);
 
   collection.items.unshift(...items);
-  collection.updatedAt = new Date().toISOString();
+  touchCollectionModified(collection);
   await persistAndRender();
 
   if (options.closeAfterSave && tabs.length > 0) {
@@ -1218,9 +1405,181 @@ async function addTabsToCollection(tabs, collection, options = {}) {
 }
 
 async function openCollection(collection) {
+  const openedAt = getNowIso();
+
   for (const item of collection.items) {
+    touchItemOpened(item, openedAt);
     await chrome.tabs.create({ url: item.url, active: false });
   }
+
+  await persistAndRender();
+}
+
+async function suggestCollectionTitleAndNotes(collection) {
+  const items = Array.isArray(collection.items) ? collection.items : [];
+
+  if (items.length < 2) {
+    showCloudMessage("Need at least 2 links to suggest title and notes.", true);
+    return;
+  }
+
+  const { suggestedTitle, suggestedNotes } = buildCollectionSummarySuggestion(collection);
+
+  if (!suggestedTitle && !suggestedNotes) {
+    showCloudMessage("Could not extract enough signal to suggest title and notes.", true);
+    return;
+  }
+
+  if (suggestedTitle) {
+    collection.name = suggestedTitle;
+  }
+
+  if (suggestedNotes) {
+    collection.notes = suggestedNotes;
+  }
+
+  touchCollectionModified(collection);
+  await persistAndRender();
+  showCloudMessage("Generated title and notes from saved links.");
+}
+
+function buildCollectionSummarySuggestion(collection) {
+  const items = Array.isArray(collection.items) ? collection.items : [];
+  const hosts = buildTopHosts(items);
+  const keywords = buildTopKeywords(items);
+  const titleCandidates = buildTitleCandidates(hosts, keywords);
+  const suggestedTitle = titleCandidates[0] || collection.name || "Untitled";
+  const suggestedNotes = buildSuggestedNotes(items.length, hosts, keywords);
+
+  return {
+    suggestedTitle,
+    suggestedNotes
+  };
+}
+
+function buildTopHosts(items) {
+  const hostCounts = new Map();
+
+  for (const item of items) {
+    const host = simplifyHost(getHost(item.url || ""));
+    if (!host) {
+      continue;
+    }
+
+    hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
+  }
+
+  return sortCounterEntries(hostCounts).slice(0, 4).map(([value]) => value);
+}
+
+function buildTopKeywords(items) {
+  const keywordCounts = new Map();
+
+  for (const item of items) {
+    const text = `${item.title || ""} ${item.url || ""}`;
+    const tokens = tokenizeForSummary(text);
+
+    for (const token of tokens) {
+      keywordCounts.set(token, (keywordCounts.get(token) || 0) + 1);
+    }
+  }
+
+  return sortCounterEntries(keywordCounts).slice(0, 6).map(([value]) => value);
+}
+
+function sortCounterEntries(counterMap) {
+  return Array.from(counterMap.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) {
+      return b[1] - a[1];
+    }
+
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+function simplifyHost(host) {
+  if (!host) {
+    return "";
+  }
+
+  const trimmed = host.replace(/^www\./, "").toLowerCase();
+  const parts = trimmed.split(".").filter(Boolean);
+
+  if (parts.length < 2) {
+    return trimmed;
+  }
+
+  return parts.slice(-2).join(".");
+}
+
+function tokenizeForSummary(text) {
+  const input = (text || "").toLowerCase();
+  const english = input.match(/[a-z0-9]{3,}/g) || [];
+  const cjk = input.match(/[\u4e00-\u9fff]{2,}/g) || [];
+  const merged = [...english, ...cjk];
+
+  return merged.filter((token) => {
+    if (TITLE_STOP_WORDS.has(token)) {
+      return false;
+    }
+
+    if (/^\d+$/.test(token)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function titleCaseToken(token) {
+  if (/[\u4e00-\u9fff]/.test(token)) {
+    return token;
+  }
+
+  return token.charAt(0).toUpperCase() + token.slice(1);
+}
+
+function buildTitleCandidates(hosts, keywords) {
+  const topKeyword = keywords[0] ? titleCaseToken(keywords[0]) : "";
+  const secondaryKeyword = keywords[1] ? titleCaseToken(keywords[1]) : "";
+  const topHost = hosts[0] ? titleCaseToken(hosts[0]) : "";
+  const secondaryHost = hosts[1] ? titleCaseToken(hosts[1]) : "";
+  const candidates = [];
+
+  if (topKeyword && secondaryKeyword) {
+    candidates.push(`${topKeyword} + ${secondaryKeyword}`);
+  }
+
+  if (topKeyword && topHost) {
+    candidates.push(`${topKeyword} · ${topHost}`);
+  }
+
+  if (topHost && secondaryHost) {
+    candidates.push(`${topHost} & ${secondaryHost}`);
+  }
+
+  if (topKeyword) {
+    candidates.push(`${topKeyword} Collection`);
+  }
+
+  if (topHost) {
+    candidates.push(`${topHost} Watchlist`);
+  }
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+function buildSuggestedNotes(totalItems, hosts, keywords) {
+  const hostText = hosts.length > 0 ? hosts.join(", ") : "mixed sources";
+  const keywordText = keywords.length > 0 ? keywords.slice(0, 5).join(", ") : "no dominant keywords";
+  return `Auto summary from ${totalItems} saved links.\nTop sources: ${hostText}.\nMain topics: ${keywordText}.`;
+}
+
+async function openItem(item) {
+  const openedAt = getNowIso();
+  touchItemOpened(item, openedAt);
+  await chrome.tabs.create({ url: item.url });
+  await persistAndRender();
 }
 
 async function persistAndRender() {
@@ -1433,11 +1792,17 @@ function clearSearchFilters() {
   searchFilters.spaceId = "all";
   searchFilters.collection = "";
   searchFilters.host = "";
+  searchFilters.timeSource = "all";
   searchFilters.dateFrom = "";
+  searchFilters.dateTo = "";
+  searchFilters.sortBy = "recent_activity";
   elements.searchSpaceFilter.value = "all";
   elements.searchCollectionFilter.value = "";
   elements.searchHostFilter.value = "";
+  elements.searchTimeSourceFilter.value = "all";
   elements.searchDateFrom.value = "";
+  elements.searchDateTo.value = "";
+  elements.searchSortSelect.value = "recent_activity";
   renderCollections();
   renderSearchResults();
 }
