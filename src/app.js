@@ -1,9 +1,10 @@
 import {
+  buildSpaceFromTobyImport,
   countItems,
   createCollection,
   getActiveSpace,
   getHost,
-  parseDeckImport,
+  parseImportPayload,
   getStorageStatus,
   isSaveableUrl,
   isDeckStorageChange,
@@ -1299,9 +1300,20 @@ async function importDeckBackup(event) {
 
   await runCloudAction(async () => {
     const raw = await file.text();
-    deck = parseDeckImport(raw);
+    const payload = parseImportPayload(raw);
+
+    if (payload.source === "tab-deck") {
+      deck = payload.deck;
+      await saveDeck(deck);
+      return "Tab Deck backup imported and saved.";
+    }
+
+    const importedSpace = buildSpaceFromTobyImport(payload.tobyImport);
+    deck.spaces.unshift(importedSpace);
+    deck.activeSpaceId = importedSpace.id;
+    deck.updatedAt = new Date().toISOString();
     await saveDeck(deck);
-    return "Backup imported and saved.";
+    return `Toby import completed: ${payload.tobyImport.stats.collectionCount} collections, ${payload.tobyImport.stats.itemCount} links.`;
   });
 }
 

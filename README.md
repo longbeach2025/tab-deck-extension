@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.12`
+- 开发版：`v0.2.0-alpha.13`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.12` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.12/tab-deck-extension-v0.2.0-alpha.12.zip)
+- [`v0.2.0-alpha.13` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.13/tab-deck-extension-v0.2.0-alpha.13.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.12`）
+## 核心功能（截至 `v0.2.0-alpha.13`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -33,7 +33,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - `v0.2.x`：Supabase 云同步 + local fallback。
 - 数据安全：
   - JSON 导出备份。
-  - JSON 导入恢复。
+  - JSON 导入恢复（支持 Tab Deck 备份 + Toby 导出 JSON）。
 - 状态可视化：
   - 当前登录账号、最近同步时间、待同步本地变更、错误详情。
 
@@ -85,7 +85,7 @@ alter table public.tab_deck_user_settings
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.12`。
+2. 安装 `v0.2.0-alpha.13`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -105,6 +105,13 @@ alter table public.tab_deck_user_settings
 - 云端不可用或失败：本地保存并标记 pending。
 - 新设备 starter deck（空 Workspace/Inbox）不会覆盖已有云数据。
 - 若云端被误写为 starter deck，本地真实数据可以回推修复。
+
+## 从 Toby 导入历史数据
+
+1. 在 Toby 中导出 JSON（`Export Data` 或 collection 菜单中的 `Export`）。
+2. 打开 Tab Deck 新标签页，点击 `Import JSON / Toby`。
+3. 选择 Toby 导出的 `.json` 文件。
+4. Tab Deck 会自动识别 Toby 格式，并导入为一个新的 Space（不会覆盖现有 Space）。
 
 ## 版本演进记录
 
@@ -193,6 +200,13 @@ alter table public.tab_deck_user_settings
   - 显示最近一次自动保存时间，便于确认后台任务状态。
 - 工作区视觉区分自动保存内容：
   - `Auto Saved` 集合增加 `AUTO` 标识、系统元信息和差异化样式，和手工保存集合可直观区分。
+
+### `v0.2.0-alpha.13`
+
+- 新增 Toby 历史数据导入能力：
+  - `Import JSON / Toby` 自动识别导入来源（Tab Deck 备份 / Toby 导出 JSON）。
+  - Toby 导入会创建新 Space 并写入所有可保存链接，不覆盖现有 Space。
+  - 导入时对无效 URL 过滤，并在 collection 内按 URL 去重。
 
 ## 构建与打包
 

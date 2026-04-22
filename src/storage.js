@@ -793,18 +793,135 @@ export function serializeDeck(deck) {
   return JSON.stringify(normalizeDeck(deck), null, 2);
 }
 
-export function parseDeckImport(rawJson) {
-  let parsed;
-
+function parseImportJson(rawJson) {
   try {
-    parsed = JSON.parse(rawJson);
+    return JSON.parse(rawJson);
   } catch {
     throw new Error("Import file is not valid JSON.");
   }
+}
 
-  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.spaces)) {
+function readTobyLabel(label) {
+  if (typeof label === "string") {
+    return label.trim();
+  }
+
+  if (!label || typeof label !== "object") {
+    return "";
+  }
+
+  return String(label.title || label.name || label.value || "").trim();
+}
+
+function parseTobyImportObject(parsed) {
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.lists)) {
+    return null;
+  }
+
+  const collections = parsed.lists
+    .filter((list) => list && typeof list === "object")
+    .map((list) => {
+      const seenUrls = new Set();
+      const cards = Array.isArray(list.cards) ? list.cards : [];
+      const labels = Array.isArray(list.labels) ? list.labels.map(readTobyLabel).filter(Boolean) : [];
+      const notes = labels.length > 0 ? `Imported from Toby. Labels: ${labels.join(", ")}` : "Imported from Toby.";
+      const items = cards
+        .map((card) => ({
+          url: typeof card?.url === "string" ? card.url.trim() : "",
+          title:
+            (typeof card?.customTitle === "string" && card.customTitle.trim()) ||
+            (typeof card?.title === "string" && card.title.trim()) ||
+            ""
+        }))
+        .filter((card) => {
+          if (!isSaveableUrl(card.url)) {
+            return false;
+          }
+
+          if (seenUrls.has(card.url)) {
+            return false;
+          }
+
+          seenUrls.add(card.url);
+          return true;
+        });
+
+      return {
+        name: typeof list.title === "string" && list.title.trim() ? list.title.trim() : "Untitled Toby List",
+        notes,
+        items
+      };
+    });
+
+  const totalItems = collections.reduce((sum, collection) => sum + collection.items.length, 0);
+
+  if (collections.length === 0 || totalItems === 0) {
+    throw new Error("Toby export was detected, but no valid links were found.");
+  }
+
+  return {
+    version: parsed.version,
+    collections,
+    stats: {
+      collectionCount: collections.length,
+      itemCount: totalItems
+    }
+  };
+}
+
+export function buildSpaceFromTobyImport(tobyImport, spaceName = "") {
+  const importedAt = nowIso();
+  const resolvedName = spaceName?.trim() || `Toby Import ${new Date(importedAt).toLocaleDateString()}`;
+
+  return {
+    id: makeId("space"),
+    name: resolvedName,
+    createdAt: importedAt,
+    collections: tobyImport.collections.map((collection) => ({
+      id: makeId("collection"),
+      name: collection.name,
+      notes: collection.notes,
+      createdAt: importedAt,
+      updatedAt: importedAt,
+      items: collection.items.map((item) => ({
+        id: makeId("link"),
+        title: item.title || item.url,
+        url: item.url,
+        favIconUrl: "",
+        addedAt: importedAt
+      }))
+    }))
+  };
+}
+
+export function parseImportPayload(rawJson) {
+  const parsed = parseImportJson(rawJson);
+
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.spaces)) {
+    return {
+      source: "tab-deck",
+      deck: normalizeDeck(parsed)
+    };
+  }
+
+  const tobyImport = parseTobyImportObject(parsed);
+
+  if (tobyImport) {
+    return {
+      source: "toby",
+      tobyImport
+    };
+  }
+
+  throw new Error("Import file format is not supported. Use a Tab Deck backup JSON or Toby export JSON.");
+}
+
+export function parseDeckImport(rawJson) {
+  const payload = parseImportPayload(rawJson);
+
+  if (payload.source !== "tab-deck") {
     throw new Error("Import file does not look like a Tab Deck backup.");
   }
 
-  return normalizeDeck(parsed);
+  return payload.deck;
 }
