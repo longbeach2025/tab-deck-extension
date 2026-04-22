@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.19`
+- 开发版：`v0.2.0-alpha.20`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.19` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.19/tab-deck-extension-v0.2.0-alpha.19.zip)
+- [`v0.2.0-alpha.20` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.20/tab-deck-extension-v0.2.0-alpha.20.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.19`）
+## 核心功能（截至 `v0.2.0-alpha.20`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -105,7 +105,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.19`。
+2. 安装 `v0.2.0-alpha.20`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -274,6 +274,14 @@ alter table public.tab_deck_links
   - 新增 `Status Center` 统一显示动作反馈、同步状态、错误信息。
   - `Save AI config` 保存后提供明确成功提示（带时间戳）。
   - 新增 AI 总开关，关闭后 `G` 按钮自动禁用。
+
+### `v0.2.0-alpha.20` (Interaction Feedback)
+
+- 交互反馈增强：
+  - 长操作期间在 `Status Center` 显示 loading 状态，减少重复点击与不确定感。
+  - `G` 按钮在 AI 生成期间进入 busy 状态并禁止重复触发。
+- AI 总结行为调整：
+  - AI 只生成并更新 `Notes`，不再修改 Collection `Title`。
 
 ## 构建与打包
 

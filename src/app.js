@@ -30,6 +30,7 @@ let liveTabs = [];
 let selectedTabIds = new Set();
 let query = "";
 let aiEnabled = true;
+const aiSummaryBusyCollectionIds = new Set();
 const searchFilters = {
   spaceId: "all",
   collection: "",
@@ -697,8 +698,11 @@ function renderCollectionCard(space, collection, visibleItems) {
   card.dataset.collectionId = collection.id;
   nameInput.value = collection.name;
   notesInput.value = collection.notes;
-  suggestSummaryButton.disabled = !aiEnabled;
-  suggestSummaryButton.title = aiEnabled ? "Generate Chinese notes" : "Enable AI notes first";
+  const isAiBusy = aiSummaryBusyCollectionIds.has(collection.id);
+  suggestSummaryButton.disabled = !aiEnabled || isAiBusy;
+  suggestSummaryButton.classList.toggle("loading", isAiBusy);
+  suggestSummaryButton.textContent = isAiBusy ? "…" : "G";
+  suggestSummaryButton.title = !aiEnabled ? "Enable AI notes first" : isAiBusy ? "Generating notes..." : "Generate Chinese notes";
   openAllButton.disabled = collection.items.length === 0;
 
   const collectionMeta = document.createElement("p");
@@ -1406,6 +1410,11 @@ async function suggestCollectionTitleAndNotes(collection) {
     return;
   }
 
+  if (aiSummaryBusyCollectionIds.has(collection.id)) {
+    showCloudMessage("AI summary is already running for this collection.");
+    return;
+  }
+
   if (!Array.isArray(collection.items) || collection.items.length < 2) {
     showCloudMessage("至少需要 2 条链接才能生成中文摘要。", true);
     return;
@@ -1418,10 +1427,13 @@ async function suggestCollectionTitleAndNotes(collection) {
     return;
   }
 
-  setCloudBusy(true);
+  aiSummaryBusyCollectionIds.add(collection.id);
+  renderCollections();
+  showCloudMessage("正在生成 AI Notes，请稍候…");
+  elements.systemActionStatus.classList.add("loading");
   try {
     const suggestion = await generateCollectionSummaryWithLlm(collection, aiConfig);
-    const preview = `建议标题：${suggestion.title}\n\n建议备注：\n${suggestion.notes}\n\n确认应用到当前列表吗？`;
+    const preview = `建议备注：\n${suggestion.notes}\n\n确认应用到当前列表吗？`;
     const approved = confirm(preview);
 
     if (!approved) {
@@ -1429,15 +1441,16 @@ async function suggestCollectionTitleAndNotes(collection) {
       return;
     }
 
-    collection.name = suggestion.title || collection.name;
     collection.notes = suggestion.notes || collection.notes;
     touchCollectionModified(collection);
     await persistAndRender();
-    showCloudMessage("已应用 AI 生成的中文标题与备注。");
+    showCloudMessage("已应用 AI 生成的中文 Notes。");
   } catch (error) {
     showCloudMessage(`AI 生成失败：${formatCloudError(error)}`, true);
   } finally {
-    setCloudBusy(false);
+    aiSummaryBusyCollectionIds.delete(collection.id);
+    elements.systemActionStatus.classList.remove("loading");
+    renderCollections();
   }
 }
 
@@ -1447,12 +1460,11 @@ async function generateCollectionSummaryWithLlm(collection, aiConfig) {
     "你是一个中文信息整理助手。请根据链接标题和来源，输出简洁、可读、可执行的中文总结。不要编造未出现的信息。";
   const userPrompt = [
     "请基于下面链接样本，生成 JSON：",
-    '{"title":"不超过22字的中文标题","notes":"2到4行中文备注，每行一句，避免空话"}',
+    '{"notes":"2到4行中文备注，每行一句，避免空话"}',
     "要求：",
-    "1) title 必须是中文，清晰概括主题；",
-    "2) notes 必须是中文，信息密度高；",
-    "3) 不要出现“根据以上内容”等套话；",
-    "4) 不要输出 JSON 以外内容。",
+    "1) notes 必须是中文，信息密度高；",
+    "2) 不要出现“根据以上内容”等套话；",
+    "3) 不要输出 JSON 以外内容。",
     "",
     `Collection 当前名称: ${collection.name || "Untitled"}`,
     `链接数: ${collection.items.length}`,
@@ -1490,14 +1502,13 @@ async function generateCollectionSummaryWithLlm(collection, aiConfig) {
   }
 
   const parsed = parseLlmJson(content);
-  const title = String(parsed.title || "").trim();
   const notes = String(parsed.notes || "").trim();
 
-  if (!title || !notes) {
-    throw new Error("LLM 返回缺少 title 或 notes。");
+  if (!notes) {
+    throw new Error("LLM 返回缺少 notes。");
   }
 
-  return { title, notes };
+  return { notes };
 }
 
 function buildCollectionSampleLines(items, limit = 40) {
@@ -1634,6 +1645,7 @@ async function importDeckBackup(event) {
 
 async function runCloudAction(action) {
   setCloudBusy(true);
+  elements.systemActionStatus.classList.add("loading");
   let finalMessage = "";
   let isWarning = false;
 
@@ -1646,6 +1658,7 @@ async function runCloudAction(action) {
     isWarning = true;
   } finally {
     setCloudBusy(false);
+    elements.systemActionStatus.classList.remove("loading");
     await renderCloudControls();
 
     if (finalMessage) {
@@ -1658,6 +1671,9 @@ function showCloudMessage(message, isWarning = false) {
   const stamp = new Date().toLocaleTimeString();
   elements.systemActionStatus.textContent = `${message} (${stamp})`;
   elements.systemActionStatus.classList.toggle("warning", isWarning);
+  if (!isWarning) {
+    elements.systemActionStatus.classList.remove("loading");
+  }
 }
 
 function renderCloudDetails() {
