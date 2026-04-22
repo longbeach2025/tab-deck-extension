@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.15`
+- 开发版：`v0.2.0-alpha.17`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.15` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.15/tab-deck-extension-v0.2.0-alpha.15.zip)
+- [`v0.2.0-alpha.17` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.17/tab-deck-extension-v0.2.0-alpha.17.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.15`）
+## 核心功能（截至 `v0.2.0-alpha.17`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -40,6 +40,11 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - link 记录 `addedAt / lastModifiedAt / lastOpenedAt`。
   - Toby 导入数据标记时间来源（`Imported time`），避免误认为原始创建时间。
   - 搜索支持 `Time source` 过滤与 `Recent activity` 排序。
+- AI 中文摘要（可选）：
+  - Collection 卡片 `G` 按钮可调用 LLM 生成中文 `Title + Notes` 建议。
+  - 先预览再确认应用，不会静默覆盖。
+  - 需在侧栏 `AI Notes` 填写 API Base URL / API Key / Model。
+  - 默认已包含 `https://api.openai.com/*` host 权限；若使用其他 API 域名，需在 `manifest.json` 增加对应 host 权限后重载扩展。
 
 ## 安装方式
 
@@ -95,7 +100,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.15`。
+2. 安装 `v0.2.0-alpha.17`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -229,6 +234,20 @@ alter table public.tab_deck_links
   - 基于列表内链接的标题与域名统计，自动生成建议标题与 Notes 并写回当前 collection。
 - Supabase 同步兼容扩展：
   - `tab_deck_collections` / `tab_deck_links` 新增 `metadata` JSONB，用于同步时间来源相关字段。
+
+### `v0.2.0-alpha.16` (workspace 调整)
+
+- 根据用户反馈精简 Collection 卡片编辑区：
+  - 移除自动生成 `Title + Notes` 按钮。
+  - 移除手动 `Title/URL` 新增链接表单。
+  - 保留 `Notes`、拖拽保存（`Drop a current tab here`）、搜索与打开能力。
+
+### `v0.2.0-alpha.17` (AI Notes)
+
+- 重新启用 Collection 卡片 `G` 按钮，并切换为 LLM 生成模式：
+  - 通过侧栏 `AI Notes` 配置 API Base URL / API Key / Model。
+  - 点击 `G` 生成中文 `Title + Notes` 建议，先预览确认后再应用。
+  - 保持手动 `Title/URL` 新增表单移除状态，仅保留拖拽和窗口保存流。
 
 ## 构建与打包
 

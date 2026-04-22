@@ -43,44 +43,17 @@ const MAX_TOMBSTONES = 500;
 const AUTO_SAVE_COLLECTION_NAME = "Auto Saved";
 const AUTO_SAVE_CONFIG_KEY = "tabDeckAutoSaveConfig";
 const AUTO_SAVE_META_KEY = "tabDeckAutoSaveMeta";
+const AI_CONFIG_KEY = "tabDeckAiConfig";
 const AUTO_SAVE_INTERVAL_OPTIONS = [3, 5, 10, 15];
 const AUTO_SAVE_DEFAULT_CONFIG = {
   enabled: true,
   intervalMinutes: 3
 };
-const TITLE_STOP_WORDS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "from",
-  "that",
-  "this",
-  "your",
-  "you",
-  "are",
-  "was",
-  "were",
-  "have",
-  "has",
-  "had",
-  "will",
-  "would",
-  "could",
-  "should",
-  "about",
-  "into",
-  "http",
-  "https",
-  "www",
-  "com",
-  "net",
-  "org",
-  "html",
-  "php",
-  "amp",
-  "news"
-]);
+const DEFAULT_AI_CONFIG = {
+  baseUrl: "https://api.openai.com/v1",
+  apiKey: "",
+  model: "gpt-4.1-mini"
+};
 
 const elements = {
   deckStats: document.querySelector("#deckStats"),
@@ -102,6 +75,10 @@ const elements = {
   exportDeckButton: document.querySelector("#exportDeckButton"),
   importDeckButton: document.querySelector("#importDeckButton"),
   importDeckInput: document.querySelector("#importDeckInput"),
+  aiBaseUrlInput: document.querySelector("#aiBaseUrlInput"),
+  aiApiKeyInput: document.querySelector("#aiApiKeyInput"),
+  aiModelInput: document.querySelector("#aiModelInput"),
+  saveAiConfigButton: document.querySelector("#saveAiConfigButton"),
   searchInput: document.querySelector("#searchInput"),
   searchSpaceFilter: document.querySelector("#searchSpaceFilter"),
   searchCollectionFilter: document.querySelector("#searchCollectionFilter"),
@@ -145,6 +122,7 @@ async function init() {
   bindStorageSyncEvents();
   render();
   await renderCloudControls();
+  await renderAiControls();
   await renderAutoSaveControls();
 }
 
@@ -210,6 +188,7 @@ function bindEvents() {
   elements.exportDeckButton.addEventListener("click", exportDeckBackup);
   elements.importDeckButton.addEventListener("click", () => elements.importDeckInput.click());
   elements.importDeckInput.addEventListener("change", importDeckBackup);
+  elements.saveAiConfigButton.addEventListener("click", saveAiConfig);
 }
 
 function bindStorageSyncEvents() {
@@ -286,6 +265,25 @@ async function renderCloudControls() {
   elements.signOutCloudButton.disabled = !user;
   elements.syncNowButton.disabled = !user;
   renderCloudDetails();
+}
+
+async function renderAiControls() {
+  const config = await getAiConfig();
+  elements.aiBaseUrlInput.value = config.baseUrl;
+  elements.aiApiKeyInput.value = config.apiKey;
+  elements.aiModelInput.value = config.model;
+}
+
+async function saveAiConfig() {
+  const config = normalizeAiConfig({
+    baseUrl: elements.aiBaseUrlInput.value,
+    apiKey: elements.aiApiKeyInput.value,
+    model: elements.aiModelInput.value
+  });
+
+  await chrome.storage.local.set({ [AI_CONFIG_KEY]: config });
+  await renderAiControls();
+  showCloudMessage("AI config saved.");
 }
 
 function renderSpaces() {
@@ -645,12 +643,9 @@ function renderCollectionCard(space, collection, visibleItems) {
   const actions = fragment.querySelector(".collection-actions");
   const nameInput = fragment.querySelector(".collection-name");
   const notesInput = fragment.querySelector(".collection-notes");
-  const openAllButton = fragment.querySelector(".open-all");
   const suggestSummaryButton = fragment.querySelector(".suggest-summary");
+  const openAllButton = fragment.querySelector(".open-all");
   const deleteButton = fragment.querySelector(".delete-collection");
-  const form = fragment.querySelector(".add-link-form");
-  const titleInput = fragment.querySelector(".link-title-input");
-  const urlInput = fragment.querySelector(".link-url-input");
   const dropZone = fragment.querySelector(".drop-zone");
   const linkList = fragment.querySelector(".link-list");
 
@@ -685,40 +680,11 @@ function renderCollectionCard(space, collection, visibleItems) {
     await persistAndRender();
   });
 
-  openAllButton.addEventListener("click", () => openCollection(collection));
   suggestSummaryButton.addEventListener("click", async () => {
     await suggestCollectionTitleAndNotes(collection);
   });
+  openAllButton.addEventListener("click", () => openCollection(collection));
   deleteButton.addEventListener("click", () => deleteCollection(collection.id));
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const url = normalizeUrl(urlInput.value.trim());
-
-    if (!url) {
-      urlInput.focus();
-      return;
-    }
-
-    const addedAt = getNowIso();
-    collection.items.unshift({
-      id: makeId("link"),
-      title: titleInput.value.trim() || getHost(url),
-      url,
-      favIconUrl: "",
-      addedAt,
-      lastModifiedAt: addedAt,
-      lastOpenedAt: "",
-      source: "manual",
-      timeAccuracy: "exact",
-      importedAt: "",
-      importBatchId: ""
-    });
-    touchCollectionModified(collection);
-    titleInput.value = "";
-    urlInput.value = "";
-    await persistAndRender();
-  });
 
   for (const target of [dropZone, card]) {
     target.addEventListener("dragover", (event) => {
@@ -1416,163 +1382,129 @@ async function openCollection(collection) {
 }
 
 async function suggestCollectionTitleAndNotes(collection) {
-  const items = Array.isArray(collection.items) ? collection.items : [];
-
-  if (items.length < 2) {
-    showCloudMessage("Need at least 2 links to suggest title and notes.", true);
+  if (!Array.isArray(collection.items) || collection.items.length < 2) {
+    showCloudMessage("至少需要 2 条链接才能生成中文摘要。", true);
     return;
   }
 
-  const { suggestedTitle, suggestedNotes } = buildCollectionSummarySuggestion(collection);
+  const aiConfig = await getAiConfig();
 
-  if (!suggestedTitle && !suggestedNotes) {
-    showCloudMessage("Could not extract enough signal to suggest title and notes.", true);
+  if (!aiConfig.apiKey) {
+    showCloudMessage("请先在 AI Notes 区填写并保存 API Key。", true);
     return;
   }
 
-  if (suggestedTitle) {
-    collection.name = suggestedTitle;
-  }
+  setCloudBusy(true);
+  try {
+    const suggestion = await generateCollectionSummaryWithLlm(collection, aiConfig);
+    const preview = `建议标题：${suggestion.title}\n\n建议备注：\n${suggestion.notes}\n\n确认应用到当前列表吗？`;
+    const approved = confirm(preview);
 
-  if (suggestedNotes) {
-    collection.notes = suggestedNotes;
-  }
-
-  touchCollectionModified(collection);
-  await persistAndRender();
-  showCloudMessage("Generated title and notes from saved links.");
-}
-
-function buildCollectionSummarySuggestion(collection) {
-  const items = Array.isArray(collection.items) ? collection.items : [];
-  const hosts = buildTopHosts(items);
-  const keywords = buildTopKeywords(items);
-  const titleCandidates = buildTitleCandidates(hosts, keywords);
-  const suggestedTitle = titleCandidates[0] || collection.name || "Untitled";
-  const suggestedNotes = buildSuggestedNotes(items.length, hosts, keywords);
-
-  return {
-    suggestedTitle,
-    suggestedNotes
-  };
-}
-
-function buildTopHosts(items) {
-  const hostCounts = new Map();
-
-  for (const item of items) {
-    const host = simplifyHost(getHost(item.url || ""));
-    if (!host) {
-      continue;
+    if (!approved) {
+      showCloudMessage("已取消应用 AI 建议。");
+      return;
     }
 
-    hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
+    collection.name = suggestion.title || collection.name;
+    collection.notes = suggestion.notes || collection.notes;
+    touchCollectionModified(collection);
+    await persistAndRender();
+    showCloudMessage("已应用 AI 生成的中文标题与备注。");
+  } catch (error) {
+    showCloudMessage(`AI 生成失败：${formatCloudError(error)}`, true);
+  } finally {
+    setCloudBusy(false);
   }
-
-  return sortCounterEntries(hostCounts).slice(0, 4).map(([value]) => value);
 }
 
-function buildTopKeywords(items) {
-  const keywordCounts = new Map();
+async function generateCollectionSummaryWithLlm(collection, aiConfig) {
+  const sampleLines = buildCollectionSampleLines(collection.items, 40);
+  const systemPrompt =
+    "你是一个中文信息整理助手。请根据链接标题和来源，输出简洁、可读、可执行的中文总结。不要编造未出现的信息。";
+  const userPrompt = [
+    "请基于下面链接样本，生成 JSON：",
+    '{"title":"不超过22字的中文标题","notes":"2到4行中文备注，每行一句，避免空话"}',
+    "要求：",
+    "1) title 必须是中文，清晰概括主题；",
+    "2) notes 必须是中文，信息密度高；",
+    "3) 不要出现“根据以上内容”等套话；",
+    "4) 不要输出 JSON 以外内容。",
+    "",
+    `Collection 当前名称: ${collection.name || "Untitled"}`,
+    `链接数: ${collection.items.length}`,
+    "样本：",
+    ...sampleLines
+  ].join("\n");
 
-  for (const item of items) {
-    const text = `${item.title || ""} ${item.url || ""}`;
-    const tokens = tokenizeForSummary(text);
+  const response = await fetch(`${aiConfig.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${aiConfig.apiKey}`
+    },
+    body: JSON.stringify({
+      model: aiConfig.model,
+      temperature: 0.3,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ]
+    })
+  });
 
-    for (const token of tokens) {
-      keywordCounts.set(token, (keywordCounts.get(token) || 0) + 1);
-    }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
   }
 
-  return sortCounterEntries(keywordCounts).slice(0, 6).map(([value]) => value);
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+
+  if (!content || typeof content !== "string") {
+    throw new Error("LLM 返回为空。");
+  }
+
+  const parsed = parseLlmJson(content);
+  const title = String(parsed.title || "").trim();
+  const notes = String(parsed.notes || "").trim();
+
+  if (!title || !notes) {
+    throw new Error("LLM 返回缺少 title 或 notes。");
+  }
+
+  return { title, notes };
 }
 
-function sortCounterEntries(counterMap) {
-  return Array.from(counterMap.entries()).sort((a, b) => {
-    if (b[1] !== a[1]) {
-      return b[1] - a[1];
-    }
+function buildCollectionSampleLines(items, limit = 40) {
+  return items.slice(0, limit).map((item, index) => {
+    const host = getHost(item.url || "");
+    const safeTitle = String(item.title || item.url || "").replace(/\s+/g, " ").trim();
+    let path = "/";
 
-    return a[0].localeCompare(b[0]);
+    try {
+      path = new URL(item.url).pathname || "/";
+    } catch {}
+
+    return `${index + 1}. [${host}] ${safeTitle} | ${path}`;
   });
 }
 
-function simplifyHost(host) {
-  if (!host) {
-    return "";
-  }
+function parseLlmJson(content) {
+  const trimmed = content.trim();
 
-  const trimmed = host.replace(/^www\./, "").toLowerCase();
-  const parts = trimmed.split(".").filter(Boolean);
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
 
-  if (parts.length < 2) {
-    return trimmed;
-  }
-
-  return parts.slice(-2).join(".");
-}
-
-function tokenizeForSummary(text) {
-  const input = (text || "").toLowerCase();
-  const english = input.match(/[a-z0-9]{3,}/g) || [];
-  const cjk = input.match(/[\u4e00-\u9fff]{2,}/g) || [];
-  const merged = [...english, ...cjk];
-
-  return merged.filter((token) => {
-    if (TITLE_STOP_WORDS.has(token)) {
-      return false;
+    if (start >= 0 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1));
     }
-
-    if (/^\d+$/.test(token)) {
-      return false;
-    }
-
-    return true;
-  });
-}
-
-function titleCaseToken(token) {
-  if (/[\u4e00-\u9fff]/.test(token)) {
-    return token;
   }
 
-  return token.charAt(0).toUpperCase() + token.slice(1);
-}
-
-function buildTitleCandidates(hosts, keywords) {
-  const topKeyword = keywords[0] ? titleCaseToken(keywords[0]) : "";
-  const secondaryKeyword = keywords[1] ? titleCaseToken(keywords[1]) : "";
-  const topHost = hosts[0] ? titleCaseToken(hosts[0]) : "";
-  const secondaryHost = hosts[1] ? titleCaseToken(hosts[1]) : "";
-  const candidates = [];
-
-  if (topKeyword && secondaryKeyword) {
-    candidates.push(`${topKeyword} + ${secondaryKeyword}`);
-  }
-
-  if (topKeyword && topHost) {
-    candidates.push(`${topKeyword} · ${topHost}`);
-  }
-
-  if (topHost && secondaryHost) {
-    candidates.push(`${topHost} & ${secondaryHost}`);
-  }
-
-  if (topKeyword) {
-    candidates.push(`${topKeyword} Collection`);
-  }
-
-  if (topHost) {
-    candidates.push(`${topHost} Watchlist`);
-  }
-
-  return Array.from(new Set(candidates.filter(Boolean)));
-}
-
-function buildSuggestedNotes(totalItems, hosts, keywords) {
-  const hostText = hosts.length > 0 ? hosts.join(", ") : "mixed sources";
-  const keywordText = keywords.length > 0 ? keywords.slice(0, 5).join(", ") : "no dominant keywords";
-  return `Auto summary from ${totalItems} saved links.\nTop sources: ${hostText}.\nMain topics: ${keywordText}.`;
+  throw new Error("无法解析 LLM 返回的 JSON。");
 }
 
 async function openItem(item) {
@@ -1788,6 +1720,24 @@ async function getAutoSaveMeta() {
   };
 }
 
+function normalizeAiConfig(rawConfig) {
+  const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  const baseUrl = String(next.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim().replace(/\/$/, "");
+  const apiKey = String(next.apiKey || "").trim();
+  const model = String(next.model || DEFAULT_AI_CONFIG.model).trim();
+
+  return {
+    baseUrl: baseUrl || DEFAULT_AI_CONFIG.baseUrl,
+    apiKey,
+    model: model || DEFAULT_AI_CONFIG.model
+  };
+}
+
+async function getAiConfig() {
+  const result = await chrome.storage.local.get(AI_CONFIG_KEY);
+  return normalizeAiConfig(result[AI_CONFIG_KEY]);
+}
+
 function clearSearchFilters() {
   searchFilters.spaceId = "all";
   searchFilters.collection = "";
@@ -1815,28 +1765,10 @@ function setCloudBusy(isBusy) {
     elements.signOutCloudButton,
     elements.syncNowButton,
     elements.exportDeckButton,
-    elements.importDeckButton
+    elements.importDeckButton,
+    elements.saveAiConfigButton
   ]) {
     button.disabled = isBusy;
-  }
-}
-
-function normalizeUrl(rawUrl) {
-  if (!rawUrl) {
-    return "";
-  }
-
-  const candidate = rawUrl.includes("://") ? rawUrl : `https://${rawUrl}`;
-
-  try {
-    const url = new URL(candidate);
-    if (!isSaveableUrl(url.href)) {
-      return "";
-    }
-
-    return url.href;
-  } catch {
-    return "";
   }
 }
 

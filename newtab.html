@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.15</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.17</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -81,6 +81,18 @@
           <button id="importDeckButton" class="secondary-button">Import JSON / Toby</button>
         </div>
         <input id="importDeckInput" type="file" accept="application/json,.json,.JSON" hidden>
+      </div>
+
+      <div class="side-section">
+        <div class="section-title">
+          <span>AI Notes</span>
+        </div>
+        <div class="cloud-fields">
+          <input id="aiBaseUrlInput" type="url" placeholder="LLM API Base URL (e.g. https://api.openai.com/v1)">
+          <input id="aiApiKeyInput" type="password" placeholder="LLM API Key">
+          <input id="aiModelInput" type="text" placeholder="Model (e.g. gpt-4.1-mini)">
+          <button id="saveAiConfigButton" class="secondary-button">Save AI config</button>
+        </div>
       </div>
 
       <div class="side-section">
@@ -168,17 +180,12 @@
         <div class="collection-top">
           <input class="collection-name" type="text">
           <div class="collection-actions">
-            <button class="icon-button suggest-summary" title="Suggest title and notes" aria-label="Suggest title and notes">G</button>
+            <button class="icon-button suggest-summary" title="Generate Chinese notes" aria-label="Generate Chinese notes">G</button>
             <button class="icon-button open-all" title="Open all links" aria-label="Open all links">O</button>
             <button class="icon-button delete-collection" title="Delete collection" aria-label="Delete collection">D</button>
           </div>
         </div>
         <textarea class="collection-notes" rows="2" placeholder="Notes"></textarea>
-        <form class="add-link-form">
-          <input class="link-title-input" type="text" placeholder="Title">
-          <input class="link-url-input" type="url" placeholder="https://example.com">
-          <button class="icon-button" title="Add link" aria-label="Add link">+</button>
-        </form>
         <div class="drop-zone">Drop a current tab here</div>
         <div class="link-list"></div>
       </article>

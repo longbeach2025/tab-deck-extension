@@ -556,12 +556,6 @@ textarea {
   border-color: var(--accent);
 }
 
-.add-link-form {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) 34px;
-  gap: 8px;
-}
-
 .drop-zone {
   display: grid;
   place-items: center;
@@ -750,13 +744,5 @@ mark {
 @media (max-width: 520px) {
   .collection-grid {
     grid-template-columns: 1fr;
-  }
-
-  .add-link-form {
-    grid-template-columns: 1fr;
-  }
-
-  .add-link-form .icon-button {
-    width: 100%;
   }
 }
