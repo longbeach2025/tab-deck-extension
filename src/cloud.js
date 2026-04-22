@@ -117,29 +117,13 @@ export async function signOutCloud() {
 }
 
 export function formatCloudError(error) {
-  if (error instanceof Error && error.message) {
-    return error.message;
+  const message = extractCloudErrorMessage(error);
+
+  if (looksLikeFetchFailure(message)) {
+    return "Network request failed (Failed to fetch). Check Supabase URL, network/proxy/firewall, then click Sync now.";
   }
 
-  if (error && typeof error === "object") {
-    const fields = ["message", "code", "details", "hint", "statusText"];
-    const parts = fields
-      .map((field) => [field, error[field]])
-      .filter(([, value]) => value)
-      .map(([field, value]) => `${field}: ${value}`);
-
-    if (parts.length > 0) {
-      return parts.join("; ");
-    }
-
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "Unknown cloud error object.";
-    }
-  }
-
-  return String(error);
+  return message;
 }
 
 export async function isCloudReady() {
@@ -148,6 +132,72 @@ export async function isCloudReady() {
   } catch {
     return false;
   }
+}
+
+function extractCloudErrorMessage(error) {
+  if (error instanceof Error) {
+    return sanitizeCloudErrorText(error.message || String(error));
+  }
+
+  if (error && typeof error === "object") {
+    const message = sanitizeCloudErrorText(error.message);
+    const code = sanitizeCloudErrorText(error.code);
+    const hint = sanitizeCloudErrorText(error.hint);
+    const statusText = sanitizeCloudErrorText(error.statusText);
+    const details = sanitizeCloudErrorDetails(error.details);
+    const parts = [
+      code ? `code: ${code}` : "",
+      message ? `message: ${message}` : "",
+      details ? `details: ${details}` : "",
+      hint ? `hint: ${hint}` : "",
+      statusText ? `status: ${statusText}` : ""
+    ].filter(Boolean);
+
+    if (parts.length > 0) {
+      return parts.join("; ");
+    }
+
+    try {
+      return sanitizeCloudErrorText(JSON.stringify(error));
+    } catch {
+      return "Unknown cloud error object.";
+    }
+  }
+
+  return sanitizeCloudErrorText(String(error));
+}
+
+function sanitizeCloudErrorText(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return "";
+  }
+
+  if (text.includes(" at chrome-extension://")) {
+    return text.split(" at chrome-extension://")[0].trim();
+  }
+
+  return text;
+}
+
+function sanitizeCloudErrorDetails(value) {
+  const text = sanitizeCloudErrorText(value);
+
+  if (!text || looksLikeStackTrace(text)) {
+    return "";
+  }
+
+  return text.length > 200 ? `${text.slice(0, 200)}...` : text;
+}
+
+function looksLikeStackTrace(value) {
+  return /(?:\s|^)at\s+[^\s]+\s+\(/.test(String(value || ""));
+}
+
+function looksLikeFetchFailure(value) {
+  const text = String(value || "").toLowerCase();
+  return text.includes("failed to fetch") || text.includes("networkerror") || text.includes("load failed");
 }
 
 export async function fetchCloudDeck() {

@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.21`
+- 开发版：`v0.2.0-alpha.22`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.21` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.21/tab-deck-extension-v0.2.0-alpha.21.zip)
+- [`v0.2.0-alpha.22` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.22/tab-deck-extension-v0.2.0-alpha.22.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.21`）
+## 核心功能（截至 `v0.2.0-alpha.22`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -105,7 +105,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.21`。
+2. 安装 `v0.2.0-alpha.22`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -292,6 +292,12 @@ alter table public.tab_deck_links
   - 远端 ID 列表改为分页全量读取后再比对，避免单页截断引发误判删除。
 - 兼容 Chrome 扩展模块解析：
   - `@supabase/supabase-js` 改为本地 vendor 文件引用，避免加载 unpacked 时出现模块解析错误。
+
+### `v0.2.0-alpha.22` (Cloud Error UX)
+
+- 优化云同步错误展示：
+  - `Failed to fetch` 统一映射为可操作的网络诊断提示（URL/网络/代理/防火墙）。
+  - 状态区不再展示冗长 `chrome-extension://...` 堆栈，错误信息更可读。
 
 ## 构建与打包
 
