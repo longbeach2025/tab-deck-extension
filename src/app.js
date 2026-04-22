@@ -50,9 +50,20 @@ const AUTO_SAVE_DEFAULT_CONFIG = {
   intervalMinutes: 3
 };
 const DEFAULT_AI_CONFIG = {
+  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-4.1-mini"
+};
+const AI_PROVIDER_PRESETS = {
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4.1-mini"
+  },
+  minimax: {
+    baseUrl: "https://api.minimax.io/v1",
+    model: "MiniMax-M2.7"
+  }
 };
 
 const elements = {
@@ -75,6 +86,7 @@ const elements = {
   exportDeckButton: document.querySelector("#exportDeckButton"),
   importDeckButton: document.querySelector("#importDeckButton"),
   importDeckInput: document.querySelector("#importDeckInput"),
+  aiProviderSelect: document.querySelector("#aiProviderSelect"),
   aiBaseUrlInput: document.querySelector("#aiBaseUrlInput"),
   aiApiKeyInput: document.querySelector("#aiApiKeyInput"),
   aiModelInput: document.querySelector("#aiModelInput"),
@@ -188,6 +200,7 @@ function bindEvents() {
   elements.exportDeckButton.addEventListener("click", exportDeckBackup);
   elements.importDeckButton.addEventListener("click", () => elements.importDeckInput.click());
   elements.importDeckInput.addEventListener("change", importDeckBackup);
+  elements.aiProviderSelect.addEventListener("change", onAiProviderChanged);
   elements.saveAiConfigButton.addEventListener("click", saveAiConfig);
 }
 
@@ -269,13 +282,16 @@ async function renderCloudControls() {
 
 async function renderAiControls() {
   const config = await getAiConfig();
+  elements.aiProviderSelect.value = config.provider;
   elements.aiBaseUrlInput.value = config.baseUrl;
   elements.aiApiKeyInput.value = config.apiKey;
   elements.aiModelInput.value = config.model;
+  applyAiProviderUi(config.provider);
 }
 
 async function saveAiConfig() {
   const config = normalizeAiConfig({
+    provider: elements.aiProviderSelect.value,
     baseUrl: elements.aiBaseUrlInput.value,
     apiKey: elements.aiApiKeyInput.value,
     model: elements.aiModelInput.value
@@ -284,6 +300,37 @@ async function saveAiConfig() {
   await chrome.storage.local.set({ [AI_CONFIG_KEY]: config });
   await renderAiControls();
   showCloudMessage("AI config saved.");
+}
+
+function onAiProviderChanged() {
+  const provider = elements.aiProviderSelect.value || "openai";
+  applyAiProviderUi(provider);
+
+  const preset = AI_PROVIDER_PRESETS[provider];
+
+  if (preset) {
+    elements.aiBaseUrlInput.value = preset.baseUrl;
+    if (!elements.aiModelInput.value.trim() || provider !== "custom") {
+      elements.aiModelInput.value = preset.model;
+    }
+  }
+}
+
+function applyAiProviderUi(provider) {
+  if (provider === "minimax") {
+    elements.aiBaseUrlInput.placeholder = "https://api.minimax.io/v1";
+    elements.aiModelInput.placeholder = "MiniMax model name (e.g. MiniMax-M2.7)";
+    return;
+  }
+
+  if (provider === "custom") {
+    elements.aiBaseUrlInput.placeholder = "Custom LLM API Base URL";
+    elements.aiModelInput.placeholder = "Custom model name";
+    return;
+  }
+
+  elements.aiBaseUrlInput.placeholder = "LLM API Base URL (e.g. https://api.openai.com/v1)";
+  elements.aiModelInput.placeholder = "Model (e.g. gpt-4.1-mini)";
 }
 
 function renderSpaces() {
@@ -1722,11 +1769,13 @@ async function getAutoSaveMeta() {
 
 function normalizeAiConfig(rawConfig) {
   const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  const provider = next.provider === "minimax" || next.provider === "custom" ? next.provider : "openai";
   const baseUrl = String(next.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim().replace(/\/$/, "");
   const apiKey = String(next.apiKey || "").trim();
   const model = String(next.model || DEFAULT_AI_CONFIG.model).trim();
 
   return {
+    provider,
     baseUrl: baseUrl || DEFAULT_AI_CONFIG.baseUrl,
     apiKey,
     model: model || DEFAULT_AI_CONFIG.model

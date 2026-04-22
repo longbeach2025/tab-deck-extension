@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.17`
+- 开发版：`v0.2.0-alpha.18`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.17` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.17/tab-deck-extension-v0.2.0-alpha.17.zip)
+- [`v0.2.0-alpha.18` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.18/tab-deck-extension-v0.2.0-alpha.18.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.17`）
+## 核心功能（截至 `v0.2.0-alpha.18`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -43,8 +43,9 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 - AI 中文摘要（可选）：
   - Collection 卡片 `G` 按钮可调用 LLM 生成中文 `Title + Notes` 建议。
   - 先预览再确认应用，不会静默覆盖。
-  - 需在侧栏 `AI Notes` 填写 API Base URL / API Key / Model。
-  - 默认已包含 `https://api.openai.com/*` host 权限；若使用其他 API 域名，需在 `manifest.json` 增加对应 host 权限后重载扩展。
+  - 侧栏 `AI Notes` 固定预设：`OpenAI / MiniMax Intl`，其余走 `Custom`。
+  - 按所选 Provider 填写 API Base URL / API Key / Model 即可使用。
+  - 默认已包含 `https://api.openai.com/*` 和 `https://api.minimax.io/*` host 权限；若使用其他 API 域名，需在 `manifest.json` 增加对应 host 权限后重载扩展。
 
 ## 安装方式
 
@@ -100,7 +101,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.17`。
+2. 安装 `v0.2.0-alpha.18`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -248,6 +249,14 @@ alter table public.tab_deck_links
   - 通过侧栏 `AI Notes` 配置 API Base URL / API Key / Model。
   - 点击 `G` 生成中文 `Title + Notes` 建议，先预览确认后再应用。
   - 保持手动 `Title/URL` 新增表单移除状态，仅保留拖拽和窗口保存流。
+
+### `v0.2.0-alpha.18` (AI Provider Presets)
+
+- AI Provider 交互优化：
+  - 固定预设 `OpenAI`、`MiniMax Intl`，其他渠道统一使用 `Custom`。
+  - 选择预设时自动填充默认 Base URL / Model，降低配置成本。
+- 新增 MiniMax 官方域名权限：
+  - `https://api.minimax.io/*`
 
 ## 构建与打包
 

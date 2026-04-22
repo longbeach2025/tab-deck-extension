@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.17</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.18</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -88,6 +88,11 @@
           <span>AI Notes</span>
         </div>
         <div class="cloud-fields">
+          <select id="aiProviderSelect" aria-label="AI provider">
+            <option value="openai">Provider: OpenAI</option>
+            <option value="minimax">Provider: MiniMax Intl</option>
+            <option value="custom">Provider: Custom</option>
+          </select>
           <input id="aiBaseUrlInput" type="url" placeholder="LLM API Base URL (e.g. https://api.openai.com/v1)">
           <input id="aiApiKeyInput" type="password" placeholder="LLM API Key">
           <input id="aiModelInput" type="text" placeholder="Model (e.g. gpt-4.1-mini)">
