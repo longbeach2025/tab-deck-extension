@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.22</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.24</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -21,7 +21,7 @@
 
       <div class="search-wrap">
         <span class="search-icon" aria-hidden="true"></span>
-        <input id="searchInput" type="search" placeholder="Search tabs, links, notes">
+        <input id="searchInput" type="search" placeholder="Search links or use natural language (e.g. last week supabase bug)">
       </div>
       <div class="search-filters">
         <select id="searchSpaceFilter" aria-label="Filter by space">
@@ -36,8 +36,13 @@
           <option value="recent_added">Sort: Recently added</option>
           <option value="oldest_added">Sort: Oldest added</option>
         </select>
+        <label class="check-row">
+          <input id="smartSearchRelaxToggle" type="checkbox">
+          <span>Auto relax smart filters on no-result</span>
+        </label>
         <button id="clearSearchFiltersButton" class="secondary-button">Clear filters</button>
       </div>
+      <div id="smartSearchChips" class="smart-search-chips hidden"></div>
 
       <div class="side-section status-section">
         <div class="section-title">

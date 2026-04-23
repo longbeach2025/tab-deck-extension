@@ -31,6 +31,14 @@ let selectedTabIds = new Set();
 let query = "";
 let aiEnabled = true;
 const aiSummaryBusyCollectionIds = new Set();
+let smartSearchHints = createEmptySmartSearchHints();
+let smartSearchOverrides = createEmptySmartSearchOverrides();
+let searchConfig = {
+  autoRelaxSmartFilters: true
+};
+const SMART_SEARCH_CACHE_LIMIT = 100;
+const smartSearchCache = new Map();
+const smartSearchOverrideCache = new Map();
 const searchFilters = {
   spaceId: "all",
   collection: "",
@@ -45,6 +53,7 @@ const AUTO_SAVE_COLLECTION_NAME = "Auto Saved";
 const AUTO_SAVE_CONFIG_KEY = "tabDeckAutoSaveConfig";
 const AUTO_SAVE_META_KEY = "tabDeckAutoSaveMeta";
 const AI_CONFIG_KEY = "tabDeckAiConfig";
+const SEARCH_CONFIG_KEY = "tabDeckSearchConfig";
 const AUTO_SAVE_INTERVAL_OPTIONS = [3, 5, 10, 15];
 const AUTO_SAVE_DEFAULT_CONFIG = {
   enabled: true,
@@ -66,6 +75,67 @@ const AI_PROVIDER_PRESETS = {
     baseUrl: "https://api.minimax.io/v1",
     model: "MiniMax-M2.7"
   }
+};
+const SEARCH_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "at",
+  "by",
+  "for",
+  "from",
+  "i",
+  "in",
+  "is",
+  "it",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "with",
+  "that",
+  "this",
+  "those",
+  "these",
+  "看",
+  "那个",
+  "这个",
+  "一下",
+  "一下子",
+  "关于",
+  "相关",
+  "一篇",
+  "文章",
+  "链接",
+  "网址",
+  "那篇",
+  "我",
+  "之前",
+  "最近"
+]);
+const SEARCH_TERM_EXPANSIONS = {
+  bug: ["issue", "error", "fix", "报错", "错误", "问题"],
+  issue: ["bug", "error", "问题", "故障"],
+  error: ["bug", "issue", "报错", "失败"],
+  fix: ["patch", "resolved", "修复"],
+  pagination: ["paging", "page", "分页", "翻页"],
+  sync: ["synchronization", "同步"],
+  docs: ["documentation", "guide", "manual", "文档", "教程"],
+  api: ["endpoint", "sdk", "接口"],
+  auth: ["authentication", "login", "oauth", "登录", "鉴权"]
+};
+const SEARCH_HOST_ALIASES = {
+  github: "github.com",
+  supabase: "supabase.com",
+  openai: "openai.com",
+  notion: "notion.so",
+  youtube: "youtube.com",
+  twitter: "x.com",
+  reddit: "reddit.com",
+  stackoverflow: "stackoverflow.com"
 };
 
 const elements = {
@@ -102,6 +172,8 @@ const elements = {
   searchDateFrom: document.querySelector("#searchDateFrom"),
   searchDateTo: document.querySelector("#searchDateTo"),
   searchSortSelect: document.querySelector("#searchSortSelect"),
+  smartSearchRelaxToggle: document.querySelector("#smartSearchRelaxToggle"),
+  smartSearchChips: document.querySelector("#smartSearchChips"),
   clearSearchFiltersButton: document.querySelector("#clearSearchFiltersButton"),
   spaceList: document.querySelector("#spaceList"),
   addSpaceButton: document.querySelector("#addSpaceButton"),
@@ -139,13 +211,16 @@ async function init() {
   await renderCloudControls();
   await renderAiControls();
   await renderAutoSaveControls();
+  await renderSearchControls();
 }
 
 function bindEvents() {
   elements.searchInput.addEventListener("input", (event) => {
     query = event.target.value.trim().toLowerCase();
+    recalculateSmartSearchHints();
     renderCollections();
     renderSearchResults();
+    renderSmartSearchChips();
   });
   elements.searchSpaceFilter.addEventListener("change", (event) => {
     searchFilters.spaceId = event.target.value;
@@ -176,6 +251,7 @@ function bindEvents() {
     searchFilters.sortBy = event.target.value || "recent_activity";
     renderSearchResults();
   });
+  elements.smartSearchRelaxToggle.addEventListener("change", saveSearchControls);
   elements.clearSearchFiltersButton.addEventListener("click", clearSearchFilters);
 
   elements.addSpaceButton.addEventListener("click", addSpace);
@@ -213,6 +289,13 @@ function bindStorageSyncEvents() {
     if (areaName === "local" && (changes[AUTO_SAVE_CONFIG_KEY] || changes[AUTO_SAVE_META_KEY])) {
       await renderAutoSaveControls();
     }
+
+    if (areaName === "local" && changes[SEARCH_CONFIG_KEY]) {
+      await renderSearchControls();
+      renderCollections();
+      renderSearchResults();
+      renderSmartSearchChips();
+    }
   });
 }
 
@@ -245,6 +328,7 @@ function toggleAllCurrentTabs() {
 function render() {
   renderStats();
   renderSearchFilters();
+  renderSmartSearchChips();
   renderSpaces();
   renderHeader();
   renderLiveTabs();
@@ -494,6 +578,71 @@ function renderSearchFilters() {
   elements.searchSortSelect.value = searchFilters.sortBy;
 }
 
+function renderSmartSearchChips() {
+  elements.smartSearchChips.replaceChildren();
+
+  if (!query) {
+    elements.smartSearchChips.classList.add("hidden");
+    return;
+  }
+
+  const chips = [];
+  if (smartSearchHints.host) {
+    chips.push({
+      label: `Host: ${smartSearchHints.host}`,
+      onRemove: () => {
+        updateSmartSearchOverrides((current) => ({ ...current, suppressHost: true }));
+      }
+    });
+  }
+
+  if (smartSearchHints.dateFrom || smartSearchHints.dateTo) {
+    chips.push({
+      label: `Date: ${smartSearchHints.dateFrom || "?"}..${smartSearchHints.dateTo || "?"}`,
+      onRemove: () => {
+        updateSmartSearchOverrides((current) => ({ ...current, suppressDate: true }));
+      }
+    });
+  }
+
+  for (const keyword of smartSearchHints.keywords.slice(0, 8)) {
+    chips.push({
+      label: `Term: ${keyword}`,
+      onRemove: () => {
+        updateSmartSearchOverrides((current) => ({
+          ...current,
+          removedKeywords: Array.from(new Set([...current.removedKeywords, keyword]))
+        }));
+      }
+    });
+  }
+
+  if (chips.length === 0) {
+    elements.smartSearchChips.classList.add("hidden");
+    return;
+  }
+
+  for (const chip of chips) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "smart-chip";
+    button.title = `Remove ${chip.label}`;
+    button.setAttribute("aria-label", `Remove ${chip.label}`);
+
+    const label = document.createElement("span");
+    label.textContent = chip.label;
+    const close = document.createElement("span");
+    close.className = "smart-chip-close";
+    close.textContent = "×";
+    button.append(label, close);
+
+    button.addEventListener("click", chip.onRemove);
+    elements.smartSearchChips.append(button);
+  }
+
+  elements.smartSearchChips.classList.remove("hidden");
+}
+
 function isSearchActive() {
   return !!(
     query ||
@@ -501,7 +650,10 @@ function isSearchActive() {
     searchFilters.host ||
     searchFilters.dateFrom ||
     searchFilters.dateTo ||
-    searchFilters.spaceId !== "all"
+    searchFilters.spaceId !== "all" ||
+    smartSearchHints.host ||
+    smartSearchHints.dateFrom ||
+    smartSearchHints.dateTo
   );
 }
 
@@ -512,7 +664,8 @@ function renderSearchResults() {
     return;
   }
 
-  const results = buildSearchResults();
+  const searchState = buildSearchResults();
+  const results = searchState.results;
   elements.searchResults.classList.remove("hidden");
   elements.searchResults.replaceChildren();
 
@@ -528,6 +681,21 @@ function renderSearchResults() {
 
   header.append(title, meta);
   elements.searchResults.append(header);
+
+  const smartSearchMeta = getSmartSearchMetaLabel();
+  if (smartSearchMeta) {
+    const hint = document.createElement("p");
+    hint.className = "muted compact";
+    hint.textContent = `Smart query: ${smartSearchMeta}`;
+    elements.searchResults.append(hint);
+  }
+
+  if (searchState.fallbackLabel) {
+    const fallback = document.createElement("p");
+    fallback.className = "muted compact";
+    fallback.textContent = searchState.fallbackLabel;
+    elements.searchResults.append(fallback);
+  }
 
   if (results.length === 0) {
     const empty = document.createElement("p");
@@ -554,7 +722,7 @@ function renderSearchResults() {
       event.preventDefault();
       await openItem(result.item);
     });
-    applyHighlightedText(link, result.item.title || result.item.url, query);
+    applyHighlightedText(link, result.item.title || result.item.url, getPrimaryHighlightTerm());
 
     const info = document.createElement("div");
     info.className = "search-result-meta";
@@ -564,7 +732,7 @@ function renderSearchResults() {
       `${result.spaceName} / ${result.collectionName} · ${getHost(result.item.url)} · Added ${formatDateLabel(
         result.item.addedAt
       )} · Active ${activityLabel}`,
-      query
+      getPrimaryHighlightTerm()
     );
 
     main.append(link, info);
@@ -601,6 +769,97 @@ function renderSearchResults() {
 }
 
 function buildSearchResults() {
+  const baseCriteria = createSearchCriteria();
+  const baseResults = collectSearchResults(baseCriteria);
+
+  if (baseResults.length > 0) {
+    return {
+      results: sortSearchResults(baseResults, baseCriteria.terms.length > 0),
+      fallbackLabel: ""
+    };
+  }
+
+  const fallbackPlans = createFallbackSearchPlans(baseCriteria);
+  if (fallbackPlans.length === 0) {
+    return {
+      results: [],
+      fallbackLabel: ""
+    };
+  }
+
+  for (const plan of fallbackPlans) {
+    const fallbackResults = collectSearchResults(plan.criteria);
+    if (fallbackResults.length > 0) {
+      return {
+        results: sortSearchResults(fallbackResults, plan.criteria.terms.length > 0),
+        fallbackLabel: plan.label
+      };
+    }
+  }
+
+  return {
+    results: [],
+    fallbackLabel: ""
+  };
+}
+
+function createSearchCriteria() {
+  return {
+    host: getEffectiveHostFilter(),
+    dateFrom: getEffectiveDateFromFilter(),
+    dateTo: getEffectiveDateToFilter(),
+    terms: getActiveSearchTerms()
+  };
+}
+
+function createFallbackSearchPlans(baseCriteria) {
+  const hasSmartHostOnly = !searchFilters.host && !!smartSearchHints.host;
+  const hasSmartDateFromOnly = !searchFilters.dateFrom && !!smartSearchHints.dateFrom;
+  const hasSmartDateToOnly = !searchFilters.dateTo && !!smartSearchHints.dateTo;
+  const hasSmartDateOnly = hasSmartDateFromOnly || hasSmartDateToOnly;
+  const plans = [];
+
+  if (!searchConfig.autoRelaxSmartFilters || !query || (!hasSmartHostOnly && !hasSmartDateOnly)) {
+    return plans;
+  }
+
+  if (hasSmartDateOnly) {
+    plans.push({
+      criteria: {
+        ...baseCriteria,
+        dateFrom: searchFilters.dateFrom || "",
+        dateTo: searchFilters.dateTo || ""
+      },
+      label: "No exact match. Showing relaxed results without smart date constraints."
+    });
+  }
+
+  if (hasSmartHostOnly) {
+    plans.push({
+      criteria: {
+        ...baseCriteria,
+        host: searchFilters.host || ""
+      },
+      label: "No exact match. Showing relaxed results without smart host constraints."
+    });
+  }
+
+  if (hasSmartDateOnly && hasSmartHostOnly) {
+    plans.push({
+      criteria: {
+        ...baseCriteria,
+        host: searchFilters.host || "",
+        dateFrom: searchFilters.dateFrom || "",
+        dateTo: searchFilters.dateTo || ""
+      },
+      label: "No exact match. Showing relaxed results without smart host/date constraints."
+    });
+  }
+
+  return plans;
+}
+
+function collectSearchResults(criteria) {
   const results = [];
 
   for (const space of deck.spaces) {
@@ -614,23 +873,30 @@ function buildSearchResults() {
       }
 
       for (const item of collection.items) {
-        if (isItemMatchFilters(collection, item, space)) {
+        if (isItemMatchFilters(collection, item, space, criteria)) {
           results.push({
             spaceId: space.id,
             spaceName: space.name,
             collectionId: collection.id,
             collectionName: collection.name,
-            item
+            item,
+            score: computeSearchScore(space, collection, item, criteria.terms)
           });
         }
       }
     }
   }
 
+  return results;
+}
+
+function sortSearchResults(results, hasSearchTerms) {
   if (searchFilters.sortBy === "recent_added") {
     results.sort((a, b) => toTimestamp(b.item.addedAt) - toTimestamp(a.item.addedAt));
   } else if (searchFilters.sortBy === "oldest_added") {
     results.sort((a, b) => toTimestamp(a.item.addedAt) - toTimestamp(b.item.addedAt));
+  } else if (hasSearchTerms) {
+    results.sort((a, b) => b.score - a.score || getItemActivityTimestamp(b.item) - getItemActivityTimestamp(a.item));
   } else {
     results.sort((a, b) => getItemActivityTimestamp(b.item) - getItemActivityTimestamp(a.item));
   }
@@ -802,11 +1068,11 @@ function renderLinkRow(space, item, collection) {
 
   const title = document.createElement("span");
   title.className = "tab-title";
-  applyHighlightedText(title, item.title || item.url, query);
+  applyHighlightedText(title, item.title || item.url, getPrimaryHighlightTerm());
 
   const host = document.createElement("span");
   host.className = "tab-host";
-  applyHighlightedText(host, getHost(item.url), query);
+  applyHighlightedText(host, getHost(item.url), getPrimaryHighlightTerm());
 
   text.append(title, host);
   link.append(icon, text);
@@ -865,25 +1131,29 @@ function isCollectionMatchFilters(space, collection) {
     return false;
   }
 
-  if (query) {
-    return [space.name, collection.name, collection.notes].some((value) => (value || "").toLowerCase().includes(query));
+  const terms = getActiveSearchTerms();
+  if (terms.length > 0) {
+    return [space.name, collection.name, collection.notes].some((value) => doesValueMatchSearchTerms(value, terms));
   }
 
   return true;
 }
 
-function isItemMatchFilters(collection, item, space = getActiveSpace(deck)) {
+function isItemMatchFilters(collection, item, space = getActiveSpace(deck), criteria = createSearchCriteria()) {
   const host = getHost(item.url || "").toLowerCase();
   const activityTs = getItemActivityTimestamp(item);
-  const searchDateFromTs = searchFilters.dateFrom ? Date.parse(`${searchFilters.dateFrom}T00:00:00`) : 0;
-  const searchDateToTs = searchFilters.dateTo ? Date.parse(`${searchFilters.dateTo}T23:59:59.999`) : 0;
+  const effectiveHost = criteria.host || "";
+  const effectiveDateFrom = criteria.dateFrom || "";
+  const effectiveDateTo = criteria.dateTo || "";
+  const searchDateFromTs = effectiveDateFrom ? Date.parse(`${effectiveDateFrom}T00:00:00`) : 0;
+  const searchDateToTs = effectiveDateTo ? Date.parse(`${effectiveDateTo}T23:59:59.999`) : 0;
   const inSelectedSpace = searchFilters.spaceId === "all" || searchFilters.spaceId === space.id;
 
   if (!inSelectedSpace) {
     return false;
   }
 
-  if (searchFilters.host && !host.includes(searchFilters.host)) {
+  if (effectiveHost && !host.includes(effectiveHost)) {
     return false;
   }
 
@@ -899,13 +1169,460 @@ function isItemMatchFilters(collection, item, space = getActiveSpace(deck)) {
     return false;
   }
 
-  if (!query) {
+  const terms = criteria.terms || [];
+  if (terms.length === 0) {
     return true;
   }
 
-  return [item.title, item.url, host, collection.name, space.name]
-    .filter(Boolean)
-    .some((value) => value.toLowerCase().includes(query));
+  return [item.title, item.url, host, collection.name, collection.notes, space.name]
+    .some((value) => doesValueMatchSearchTerms(value, terms));
+}
+
+function createEmptySmartSearchHints() {
+  return {
+    rawInput: "",
+    keywords: [],
+    expandedTerms: [],
+    host: "",
+    dateFrom: "",
+    dateTo: "",
+    hasDerivedFilter: false
+  };
+}
+
+function createEmptySmartSearchOverrides() {
+  return {
+    removedKeywords: [],
+    suppressHost: false,
+    suppressDate: false
+  };
+}
+
+function normalizeSmartSearchOverrides(rawOverrides) {
+  const next = rawOverrides && typeof rawOverrides === "object" ? rawOverrides : {};
+  const removedKeywords = Array.isArray(next.removedKeywords)
+    ? Array.from(new Set(next.removedKeywords.map((keyword) => String(keyword || "").toLowerCase()).filter(Boolean))).slice(0, 30)
+    : [];
+
+  return {
+    removedKeywords,
+    suppressHost: Boolean(next.suppressHost),
+    suppressDate: Boolean(next.suppressDate)
+  };
+}
+
+function cloneSmartSearchHints(hints) {
+  return {
+    rawInput: hints.rawInput || "",
+    keywords: Array.isArray(hints.keywords) ? [...hints.keywords] : [],
+    expandedTerms: Array.isArray(hints.expandedTerms) ? [...hints.expandedTerms] : [],
+    host: hints.host || "",
+    dateFrom: hints.dateFrom || "",
+    dateTo: hints.dateTo || "",
+    hasDerivedFilter: Boolean(hints.hasDerivedFilter)
+  };
+}
+
+function parseSmartSearchQuery(rawInput) {
+  const normalizedInput = String(rawInput || "").trim().toLowerCase();
+  if (!normalizedInput) {
+    return createEmptySmartSearchHints();
+  }
+
+  const cached = smartSearchCache.get(normalizedInput);
+  if (cached) {
+    smartSearchCache.delete(normalizedInput);
+    smartSearchCache.set(normalizedInput, cached);
+    return cloneSmartSearchHints(cached);
+  }
+
+  const dateRange = parseRelativeDateRange(normalizedInput);
+  const datePatterns = [
+    /今天/g,
+    /\btoday\b/g,
+    /昨天/g,
+    /\byesterday\b/g,
+    /本周/g,
+    /\bthis week\b/g,
+    /上周/g,
+    /\blast week\b/g,
+    /本月/g,
+    /\bthis month\b/g,
+    /上个月/g,
+    /上月/g,
+    /\blast month\b/g,
+    /(最近|近)\s*\d{1,2}\s*天/g,
+    /\b(last|past)\s+\d{1,2}\s+days?\b/g
+  ];
+  let normalizedForTerms = normalizedInput;
+  for (const pattern of datePatterns) {
+    normalizedForTerms = normalizedForTerms.replace(pattern, " ");
+  }
+
+  let host = extractHostFilter(normalizedInput);
+  if (host) {
+    normalizedForTerms = normalizedForTerms.replace(new RegExp(host.replace(/\./g, "\\."), "g"), " ");
+  }
+
+  const keywords = tokenizeSearchInput(normalizedForTerms).filter((token) => !SEARCH_STOP_WORDS.has(token));
+  const expandedTerms = expandSearchTerms(keywords);
+  if (expandedTerms.length === 0) {
+    expandedTerms.push(normalizedInput);
+  }
+
+  const hints = {
+    rawInput: normalizedInput,
+    keywords,
+    expandedTerms,
+    host,
+    dateFrom: dateRange?.dateFrom || "",
+    dateTo: dateRange?.dateTo || "",
+    hasDerivedFilter: Boolean(host || dateRange || keywords.length > 0)
+  };
+  rememberSmartSearchCache(normalizedInput, hints);
+  return cloneSmartSearchHints(hints);
+}
+
+function rememberSmartSearchCache(key, hints) {
+  smartSearchCache.set(key, cloneSmartSearchHints(hints));
+  if (smartSearchCache.size <= SMART_SEARCH_CACHE_LIMIT) {
+    return;
+  }
+
+  const oldestKey = smartSearchCache.keys().next().value;
+  if (oldestKey) {
+    smartSearchCache.delete(oldestKey);
+  }
+}
+
+function getSmartSearchOverrides(rawInput) {
+  const normalizedInput = String(rawInput || "").trim().toLowerCase();
+  if (!normalizedInput) {
+    return createEmptySmartSearchOverrides();
+  }
+
+  const cached = smartSearchOverrideCache.get(normalizedInput);
+  if (cached) {
+    smartSearchOverrideCache.delete(normalizedInput);
+    smartSearchOverrideCache.set(normalizedInput, cached);
+    return normalizeSmartSearchOverrides(cached);
+  }
+
+  return createEmptySmartSearchOverrides();
+}
+
+function rememberSmartSearchOverrides(rawInput, overrides) {
+  const normalizedInput = String(rawInput || "").trim().toLowerCase();
+  if (!normalizedInput) {
+    return;
+  }
+
+  smartSearchOverrideCache.set(normalizedInput, normalizeSmartSearchOverrides(overrides));
+  if (smartSearchOverrideCache.size <= SMART_SEARCH_CACHE_LIMIT) {
+    return;
+  }
+
+  const oldestKey = smartSearchOverrideCache.keys().next().value;
+  if (oldestKey) {
+    smartSearchOverrideCache.delete(oldestKey);
+  }
+}
+
+function applySmartSearchOverrides(hints, overrides) {
+  const normalizedOverrides = normalizeSmartSearchOverrides(overrides);
+  const next = cloneSmartSearchHints(hints);
+
+  if (normalizedOverrides.suppressHost) {
+    next.host = "";
+  }
+
+  if (normalizedOverrides.suppressDate) {
+    next.dateFrom = "";
+    next.dateTo = "";
+  }
+
+  if (normalizedOverrides.removedKeywords.length > 0) {
+    const removedSet = new Set(normalizedOverrides.removedKeywords);
+    next.keywords = next.keywords.filter((keyword) => !removedSet.has(keyword));
+    next.expandedTerms = expandSearchTerms(next.keywords);
+
+    if (next.expandedTerms.length === 0 && next.keywords.length > 0) {
+      next.expandedTerms = [...next.keywords];
+    }
+  }
+
+  next.hasDerivedFilter = Boolean(next.host || next.dateFrom || next.dateTo || next.keywords.length > 0);
+  return next;
+}
+
+function recalculateSmartSearchHints() {
+  smartSearchOverrides = getSmartSearchOverrides(query);
+  smartSearchHints = applySmartSearchOverrides(parseSmartSearchQuery(query), smartSearchOverrides);
+}
+
+function updateSmartSearchOverrides(mutator) {
+  if (!query) {
+    return;
+  }
+
+  const nextOverrides = normalizeSmartSearchOverrides(mutator({ ...smartSearchOverrides }));
+  smartSearchOverrides = nextOverrides;
+  rememberSmartSearchOverrides(query, nextOverrides);
+  smartSearchHints = applySmartSearchOverrides(parseSmartSearchQuery(query), nextOverrides);
+  renderCollections();
+  renderSearchResults();
+  renderSmartSearchChips();
+}
+
+function tokenizeSearchInput(value) {
+  return (value.match(/[a-z0-9\u4e00-\u9fff][a-z0-9\u4e00-\u9fff._-]*/g) || [])
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length >= 2);
+}
+
+function expandSearchTerms(keywords) {
+  const terms = new Set();
+  for (const keyword of keywords) {
+    terms.add(keyword);
+
+    const mapped = SEARCH_TERM_EXPANSIONS[keyword];
+    if (mapped) {
+      for (const candidate of mapped) {
+        terms.add(candidate.toLowerCase());
+      }
+    }
+  }
+
+  return Array.from(terms);
+}
+
+function extractHostFilter(input) {
+  const explicitDomainMatch = input.match(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/);
+  if (explicitDomainMatch?.[0]) {
+    return explicitDomainMatch[0].toLowerCase();
+  }
+
+  const tokens = tokenizeSearchInput(input);
+  for (const token of tokens) {
+    const mapped = SEARCH_HOST_ALIASES[token];
+    if (mapped) {
+      return mapped;
+    }
+  }
+
+  return "";
+}
+
+function parseRelativeDateRange(input) {
+  const now = new Date();
+  const today = startOfDay(now);
+
+  if (input.includes("today") || input.includes("今天")) {
+    return toDateRange(today, today);
+  }
+
+  if (input.includes("yesterday") || input.includes("昨天")) {
+    const yesterday = shiftDays(today, -1);
+    return toDateRange(yesterday, yesterday);
+  }
+
+  if (input.includes("this week") || input.includes("本周")) {
+    return toDateRange(startOfWeek(today), today);
+  }
+
+  if (input.includes("last week") || input.includes("上周")) {
+    const thisWeekStart = startOfWeek(today);
+    const lastWeekStart = shiftDays(thisWeekStart, -7);
+    const lastWeekEnd = shiftDays(lastWeekStart, 6);
+    return toDateRange(lastWeekStart, lastWeekEnd);
+  }
+
+  if (input.includes("this month") || input.includes("本月")) {
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    return toDateRange(monthStart, today);
+  }
+
+  if (input.includes("last month") || input.includes("上个月") || input.includes("上月")) {
+    const monthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const monthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+    return toDateRange(monthStart, monthEnd);
+  }
+
+  const englishDaysMatch = input.match(/\b(?:last|past)\s+(\d{1,2})\s+days?\b/);
+  if (englishDaysMatch?.[1]) {
+    const dayCount = Number(englishDaysMatch[1]);
+    if (Number.isFinite(dayCount) && dayCount >= 1 && dayCount <= 30) {
+      return toDateRange(shiftDays(today, -(dayCount - 1)), today);
+    }
+  }
+
+  const chineseDaysMatch = input.match(/(?:最近|近)\s*(\d{1,2})\s*天/);
+  if (chineseDaysMatch?.[1]) {
+    const dayCount = Number(chineseDaysMatch[1]);
+    if (Number.isFinite(dayCount) && dayCount >= 1 && dayCount <= 30) {
+      return toDateRange(shiftDays(today, -(dayCount - 1)), today);
+    }
+  }
+
+  return null;
+}
+
+function toDateRange(startDate, endDate) {
+  return {
+    dateFrom: toDateInputValue(startDate),
+    dateTo: toDateInputValue(endDate)
+  };
+}
+
+function toDateInputValue(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function startOfWeek(date) {
+  const start = startOfDay(date);
+  const weekday = (start.getDay() + 6) % 7;
+  return shiftDays(start, -weekday);
+}
+
+function shiftDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function getEffectiveHostFilter() {
+  return searchFilters.host || smartSearchHints.host || "";
+}
+
+function getEffectiveDateFromFilter() {
+  return searchFilters.dateFrom || smartSearchHints.dateFrom || "";
+}
+
+function getEffectiveDateToFilter() {
+  return searchFilters.dateTo || smartSearchHints.dateTo || "";
+}
+
+function getActiveSearchTerms() {
+  if (!query) {
+    return [];
+  }
+
+  if (smartSearchHints.expandedTerms.length > 0) {
+    return smartSearchHints.expandedTerms;
+  }
+
+  if (smartSearchOverrides.removedKeywords.length > 0) {
+    return [];
+  }
+
+  return [query];
+}
+
+function getPrimaryHighlightTerm() {
+  if (smartSearchHints.keywords.length > 0) {
+    return smartSearchHints.keywords[0];
+  }
+
+  return query;
+}
+
+function doesValueMatchSearchTerms(value, terms) {
+  const normalized = String(value || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return terms.some((term) => normalized.includes(term));
+}
+
+function computeSearchScore(space, collection, item, terms = getActiveSearchTerms()) {
+  if (terms.length === 0) {
+    return getRecencyScore(item);
+  }
+
+  const title = String(item.title || "").toLowerCase();
+  const url = String(item.url || "").toLowerCase();
+  const host = getHost(item.url || "").toLowerCase();
+  const collectionName = String(collection.name || "").toLowerCase();
+  const spaceName = String(space.name || "").toLowerCase();
+  const collectionNotes = String(collection.notes || "").toLowerCase();
+  let score = 0;
+
+  for (const term of terms) {
+    if (title.includes(term)) {
+      score += 8;
+    }
+    if (url.includes(term)) {
+      score += 5;
+    }
+    if (host.includes(term)) {
+      score += 4;
+    }
+    if (collectionName.includes(term)) {
+      score += 3;
+    }
+    if (collectionNotes.includes(term)) {
+      score += 2;
+    }
+    if (spaceName.includes(term)) {
+      score += 1;
+    }
+  }
+
+  if (query && query.length >= 4 && (title.includes(query) || url.includes(query))) {
+    score += 12;
+  }
+
+  score += getRecencyScore(item);
+  return score;
+}
+
+function getRecencyScore(item) {
+  const activityTs = getItemActivityTimestamp(item);
+  if (!activityTs) {
+    return 0;
+  }
+
+  const ageDays = Math.max(0, (Date.now() - activityTs) / (24 * 60 * 60 * 1000));
+  if (ageDays <= 1) {
+    return 8;
+  }
+  if (ageDays <= 7) {
+    return 6;
+  }
+  if (ageDays <= 30) {
+    return 4;
+  }
+  if (ageDays <= 90) {
+    return 2;
+  }
+  return 0;
+}
+
+function getSmartSearchMetaLabel() {
+  if (!query || !smartSearchHints.hasDerivedFilter) {
+    return "";
+  }
+
+  const labels = [];
+  if (smartSearchHints.host) {
+    labels.push(`host=${smartSearchHints.host}`);
+  }
+  if (smartSearchHints.dateFrom || smartSearchHints.dateTo) {
+    labels.push(`date=${smartSearchHints.dateFrom || "?"}..${smartSearchHints.dateTo || "?"}`);
+  }
+  if (smartSearchHints.keywords.length > 0) {
+    labels.push(`terms=${smartSearchHints.keywords.slice(0, 4).join(", ")}`);
+  }
+
+  return labels.join(" · ");
 }
 
 function applyHighlightedText(node, text, keyword) {
@@ -1719,9 +2436,37 @@ async function saveAutoSaveControls() {
   showCloudMessage(config.enabled ? `Background auto-save is on (${config.intervalMinutes} min).` : "Background auto-save is off.");
 }
 
+async function renderSearchControls() {
+  searchConfig = await getSearchConfig();
+  elements.smartSearchRelaxToggle.checked = searchConfig.autoRelaxSmartFilters;
+}
+
+async function saveSearchControls() {
+  const config = normalizeSearchConfig({
+    autoRelaxSmartFilters: elements.smartSearchRelaxToggle.checked
+  });
+
+  await chrome.storage.local.set({
+    [SEARCH_CONFIG_KEY]: config
+  });
+
+  searchConfig = config;
+  renderCollections();
+  renderSearchResults();
+  renderSmartSearchChips();
+  showCloudMessage(
+    config.autoRelaxSmartFilters
+      ? "Smart search auto-relax is on."
+      : "Smart search auto-relax is off."
+  );
+}
+
 function clearSearch() {
   query = "";
+  smartSearchHints = createEmptySmartSearchHints();
+  smartSearchOverrides = createEmptySmartSearchOverrides();
   elements.searchInput.value = "";
+  renderSmartSearchChips();
 }
 
 function isAutoSavedCollection(collection) {
@@ -1741,9 +2486,21 @@ function normalizeAutoSaveConfig(rawConfig) {
   };
 }
 
+function normalizeSearchConfig(rawConfig) {
+  const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  return {
+    autoRelaxSmartFilters: typeof next.autoRelaxSmartFilters === "boolean" ? next.autoRelaxSmartFilters : true
+  };
+}
+
 async function getAutoSaveConfig() {
   const result = await chrome.storage.local.get(AUTO_SAVE_CONFIG_KEY);
   return normalizeAutoSaveConfig(result[AUTO_SAVE_CONFIG_KEY]);
+}
+
+async function getSearchConfig() {
+  const result = await chrome.storage.local.get(SEARCH_CONFIG_KEY);
+  return normalizeSearchConfig(result[SEARCH_CONFIG_KEY]);
 }
 
 async function getAutoSaveMeta() {

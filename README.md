@@ -11,19 +11,19 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.22`
+- 开发版：`v0.2.0-alpha.24`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.22` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.22/tab-deck-extension-v0.2.0-alpha.22.zip)
+- [`v0.2.0-alpha.24` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.24/tab-deck-extension-v0.2.0-alpha.24.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.22`）
+## 核心功能（截至 `v0.2.0-alpha.24`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
 - Space / Collection / Link 三级组织结构。
-- 标题、URL、域名、集合名、备注搜索。
+- 标题、URL、域名、集合名、备注搜索（支持自然语言查询转过滤条件）。
 - 一键打开集合中的全部链接。
 - 手动添加链接。
 - 将当前窗口 tab 拖拽到指定 Collection。
@@ -105,7 +105,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.22`。
+2. 安装 `v0.2.0-alpha.24`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -298,6 +298,31 @@ alter table public.tab_deck_links
 - 优化云同步错误展示：
   - `Failed to fetch` 统一映射为可操作的网络诊断提示（URL/网络/代理/防火墙）。
   - 状态区不再展示冗长 `chrome-extension://...` 堆栈，错误信息更可读。
+
+### `v0.2.0-alpha.23` (Natural Language Search MVP)
+
+- 改造 Links 搜索为“自然语言查询 + 结构化过滤”双层检索：
+  - 输入自然语言后，自动提取关键词并做同义扩展（例如 bug/issue/error）。
+  - 支持自动识别域名/站点词并映射为 host 过滤（如 github/supabase）。
+  - 支持相对时间词识别并映射为日期范围（如 上周/last week/最近7天）。
+- 在默认排序下引入相关性评分：
+  - 结合标题、URL、域名、集合名、备注与近期活跃度进行加权排序。
+  - 保持“快速本地检索”，不把 AI 调用放在结果检索链路里，避免慢查询。
+- 无结果自动回退（仅放宽自动推断条件）：
+  - 第一轮：仅放宽 smart 日期约束。
+  - 第二轮：仅放宽 smart 域名约束。
+  - 第三轮：同时放宽 smart 日期 + smart 域名约束。
+  - 手动输入的 host/date 过滤条件始终保持不变。
+  - 该能力支持开关（默认开启）：`Auto relax smart filters on no-result`。
+
+### `v0.2.0-alpha.24` (Editable Smart Search Chips)
+
+- 自然语言解析结果可视化为可编辑 chips：
+  - 自动识别的 `Host / Date / Term` 会显示为条件 chips。
+  - 点击 chip 可一键移除对应条件，并立即重算搜索结果。
+- 条件删除支持按 query 记忆：
+  - 对同一条查询语句移除过的条件会在当前会话中保留。
+  - 搜索为空时会自动清空当前生效条件状态。
 
 ## 构建与打包
 
