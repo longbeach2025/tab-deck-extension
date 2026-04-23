@@ -29,16 +29,29 @@ let deck;
 let liveTabs = [];
 let selectedTabIds = new Set();
 let query = "";
-let aiEnabled = true;
-const aiSummaryBusyCollectionIds = new Set();
 let smartSearchHints = createEmptySmartSearchHints();
 let smartSearchOverrides = createEmptySmartSearchOverrides();
+let searchLlmDebounceTimer = null;
+let searchLlmRequestId = 0;
+let searchLlmMissingConfigNotified = false;
+let searchEnhancementIndex = createEmptySearchEnhancementIndex();
+let searchEnhancementBusy = false;
+let searchEnhancementTimer = null;
+let lastSearchInputAt = 0;
 let searchConfig = {
-  autoRelaxSmartFilters: true
+  autoRelaxSmartFilters: true,
+  llmStrictMode: false,
+  llmPreprocessEnabled: true
 };
 const SMART_SEARCH_CACHE_LIMIT = 100;
+const SEARCH_LLM_DEBOUNCE_MS = 420;
+const SEARCH_ENHANCEMENT_INDEX_KEY = "tabDeckSearchEnhancementIndex";
+const SEARCH_ENHANCEMENT_BATCH_SIZE = 6;
+const SEARCH_ENHANCEMENT_IDLE_MS = 9000;
+const SEARCH_ENHANCEMENT_COOLDOWN_MS = 45000;
 const smartSearchCache = new Map();
 const smartSearchOverrideCache = new Map();
+const smartSearchLlmCache = new Map();
 const searchFilters = {
   spaceId: "all",
   collection: "",
@@ -61,7 +74,6 @@ const AUTO_SAVE_DEFAULT_CONFIG = {
 };
 const DEFAULT_AI_CONFIG = {
   provider: "openai",
-  enabled: true,
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-4.1-mini"
@@ -159,7 +171,6 @@ const elements = {
   exportDeckButton: document.querySelector("#exportDeckButton"),
   importDeckButton: document.querySelector("#importDeckButton"),
   importDeckInput: document.querySelector("#importDeckInput"),
-  aiEnabledToggle: document.querySelector("#aiEnabledToggle"),
   aiProviderSelect: document.querySelector("#aiProviderSelect"),
   aiBaseUrlInput: document.querySelector("#aiBaseUrlInput"),
   aiApiKeyInput: document.querySelector("#aiApiKeyInput"),
@@ -173,6 +184,9 @@ const elements = {
   searchDateTo: document.querySelector("#searchDateTo"),
   searchSortSelect: document.querySelector("#searchSortSelect"),
   smartSearchRelaxToggle: document.querySelector("#smartSearchRelaxToggle"),
+  llmStrictModeToggle: document.querySelector("#llmStrictModeToggle"),
+  llmPreprocessToggle: document.querySelector("#llmPreprocessToggle"),
+  runPreprocessButton: document.querySelector("#runPreprocessButton"),
   smartSearchChips: document.querySelector("#smartSearchChips"),
   clearSearchFiltersButton: document.querySelector("#clearSearchFiltersButton"),
   spaceList: document.querySelector("#spaceList"),
@@ -212,15 +226,19 @@ async function init() {
   await renderAiControls();
   await renderAutoSaveControls();
   await renderSearchControls();
+  await loadSearchEnhancementIndex();
+  scheduleSearchEnhancementProcessing();
 }
 
 function bindEvents() {
   elements.searchInput.addEventListener("input", (event) => {
+    lastSearchInputAt = Date.now();
     query = event.target.value.trim().toLowerCase();
     recalculateSmartSearchHints();
     renderCollections();
     renderSearchResults();
     renderSmartSearchChips();
+    scheduleLlmSmartSearchRefresh();
   });
   elements.searchSpaceFilter.addEventListener("change", (event) => {
     searchFilters.spaceId = event.target.value;
@@ -252,6 +270,9 @@ function bindEvents() {
     renderSearchResults();
   });
   elements.smartSearchRelaxToggle.addEventListener("change", saveSearchControls);
+  elements.llmStrictModeToggle.addEventListener("change", saveSearchControls);
+  elements.llmPreprocessToggle.addEventListener("change", saveSearchControls);
+  elements.runPreprocessButton.addEventListener("click", () => runSearchEnhancementProcessing({ force: true }));
   elements.clearSearchFiltersButton.addEventListener("click", clearSearchFilters);
 
   elements.addSpaceButton.addEventListener("click", addSpace);
@@ -274,7 +295,6 @@ function bindEvents() {
   elements.exportDeckButton.addEventListener("click", exportDeckBackup);
   elements.importDeckButton.addEventListener("click", () => elements.importDeckInput.click());
   elements.importDeckInput.addEventListener("change", importDeckBackup);
-  elements.aiEnabledToggle.addEventListener("change", saveAiConfig);
   elements.aiProviderSelect.addEventListener("change", onAiProviderChanged);
   elements.saveAiConfigButton.addEventListener("click", saveAiConfig);
 }
@@ -295,6 +315,12 @@ function bindStorageSyncEvents() {
       renderCollections();
       renderSearchResults();
       renderSmartSearchChips();
+    }
+
+    if (areaName === "local" && changes[SEARCH_ENHANCEMENT_INDEX_KEY]) {
+      await loadSearchEnhancementIndex();
+      renderCollections();
+      renderSearchResults();
     }
   });
 }
@@ -335,6 +361,7 @@ function render() {
   renderRecentlyDeleted();
   renderSearchResults();
   renderCollections();
+  scheduleSearchEnhancementProcessing();
 }
 
 function renderStats() {
@@ -365,19 +392,15 @@ async function renderCloudControls() {
 
 async function renderAiControls() {
   const config = await getAiConfig();
-  aiEnabled = config.enabled;
-  elements.aiEnabledToggle.checked = config.enabled;
   elements.aiProviderSelect.value = config.provider;
   elements.aiBaseUrlInput.value = config.baseUrl;
   elements.aiApiKeyInput.value = config.apiKey;
   elements.aiModelInput.value = config.model;
   applyAiProviderUi(config.provider);
-  renderCollections();
 }
 
 async function saveAiConfig() {
   const config = normalizeAiConfig({
-    enabled: elements.aiEnabledToggle.checked,
     provider: elements.aiProviderSelect.value,
     baseUrl: elements.aiBaseUrlInput.value,
     apiKey: elements.aiApiKeyInput.value,
@@ -385,8 +408,12 @@ async function saveAiConfig() {
   });
 
   await chrome.storage.local.set({ [AI_CONFIG_KEY]: config });
+  smartSearchLlmCache.clear();
+  searchLlmMissingConfigNotified = false;
   await renderAiControls();
-  showCloudMessage("AI config saved successfully.");
+  showCloudMessage("LLM search config saved.");
+  scheduleLlmSmartSearchRefresh(true);
+  scheduleSearchEnhancementProcessing(true);
 }
 
 function onAiProviderChanged() {
@@ -955,7 +982,6 @@ function renderCollectionCard(space, collection, visibleItems) {
   const actions = fragment.querySelector(".collection-actions");
   const nameInput = fragment.querySelector(".collection-name");
   const notesInput = fragment.querySelector(".collection-notes");
-  const suggestSummaryButton = fragment.querySelector(".suggest-summary");
   const openAllButton = fragment.querySelector(".open-all");
   const deleteButton = fragment.querySelector(".delete-collection");
   const dropZone = fragment.querySelector(".drop-zone");
@@ -964,11 +990,6 @@ function renderCollectionCard(space, collection, visibleItems) {
   card.dataset.collectionId = collection.id;
   nameInput.value = collection.name;
   notesInput.value = collection.notes;
-  const isAiBusy = aiSummaryBusyCollectionIds.has(collection.id);
-  suggestSummaryButton.disabled = !aiEnabled || isAiBusy;
-  suggestSummaryButton.classList.toggle("loading", isAiBusy);
-  suggestSummaryButton.textContent = isAiBusy ? "…" : "G";
-  suggestSummaryButton.title = !aiEnabled ? "Enable AI notes first" : isAiBusy ? "Generating notes..." : "Generate Chinese notes";
   openAllButton.disabled = collection.items.length === 0;
 
   const collectionMeta = document.createElement("p");
@@ -1002,9 +1023,6 @@ function renderCollectionCard(space, collection, visibleItems) {
     await persistAndRender();
   });
 
-  suggestSummaryButton.addEventListener("click", async () => {
-    await suggestCollectionTitleAndNotes(collection);
-  });
   openAllButton.addEventListener("click", () => openCollection(collection));
   deleteButton.addEventListener("click", () => deleteCollection(collection.id));
 
@@ -1174,8 +1192,10 @@ function isItemMatchFilters(collection, item, space = getActiveSpace(deck), crit
     return true;
   }
 
-  return [item.title, item.url, host, collection.name, collection.notes, space.name]
-    .some((value) => doesValueMatchSearchTerms(value, terms));
+  const enhancementTerms = getSearchEnhancementTerms(item);
+  return [item.title, item.url, host, collection.name, collection.notes, space.name, ...enhancementTerms].some((value) =>
+    doesValueMatchSearchTerms(value, terms)
+  );
 }
 
 function createEmptySmartSearchHints() {
@@ -1357,7 +1377,8 @@ function applySmartSearchOverrides(hints, overrides) {
 
 function recalculateSmartSearchHints() {
   smartSearchOverrides = getSmartSearchOverrides(query);
-  smartSearchHints = applySmartSearchOverrides(parseSmartSearchQuery(query), smartSearchOverrides);
+  const baseHints = searchConfig.llmStrictMode ? createNeutralSmartSearchHints(query) : parseSmartSearchQuery(query);
+  smartSearchHints = applySmartSearchOverrides(baseHints, smartSearchOverrides);
 }
 
 function updateSmartSearchOverrides(mutator) {
@@ -1368,10 +1389,18 @@ function updateSmartSearchOverrides(mutator) {
   const nextOverrides = normalizeSmartSearchOverrides(mutator({ ...smartSearchOverrides }));
   smartSearchOverrides = nextOverrides;
   rememberSmartSearchOverrides(query, nextOverrides);
-  smartSearchHints = applySmartSearchOverrides(parseSmartSearchQuery(query), nextOverrides);
+  smartSearchHints = applySmartSearchOverrides(getPreferredBaseHintsForQuery(query), nextOverrides);
   renderCollections();
   renderSearchResults();
   renderSmartSearchChips();
+}
+
+function getPreferredBaseHintsForQuery(input) {
+  const cachedLlmHints = getCachedLlmHintsForQuery(input);
+  if (cachedLlmHints) {
+    return cachedLlmHints;
+  }
+  return searchConfig.llmStrictMode ? createNeutralSmartSearchHints(input) : parseSmartSearchQuery(input);
 }
 
 function tokenizeSearchInput(value) {
@@ -1553,6 +1582,7 @@ function computeSearchScore(space, collection, item, terms = getActiveSearchTerm
   const collectionName = String(collection.name || "").toLowerCase();
   const spaceName = String(space.name || "").toLowerCase();
   const collectionNotes = String(collection.notes || "").toLowerCase();
+  const enhancementTerms = getSearchEnhancementTerms(item);
   let score = 0;
 
   for (const term of terms) {
@@ -1573,6 +1603,11 @@ function computeSearchScore(space, collection, item, terms = getActiveSearchTerm
     }
     if (spaceName.includes(term)) {
       score += 1;
+    }
+    for (const enhancementTerm of enhancementTerms) {
+      if (enhancementTerm.includes(term)) {
+        score += 4;
+      }
     }
   }
 
@@ -2121,74 +2156,244 @@ async function openCollection(collection) {
   await persistAndRender();
 }
 
-async function suggestCollectionTitleAndNotes(collection) {
-  if (!aiEnabled) {
-    showCloudMessage("AI notes generation is disabled. Enable it first.");
+function parseLlmJson(content) {
+  const trimmed = content.trim();
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+
+    if (start >= 0 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1));
+    }
+  }
+
+  throw new Error("无法解析 LLM 返回的 JSON。");
+}
+
+function scheduleLlmSmartSearchRefresh(force = false) {
+  if (searchLlmDebounceTimer) {
+    clearTimeout(searchLlmDebounceTimer);
+    searchLlmDebounceTimer = null;
+  }
+
+  const input = query.trim();
+  if (!input) {
+    searchLlmRequestId += 1;
     return;
   }
 
-  if (aiSummaryBusyCollectionIds.has(collection.id)) {
-    showCloudMessage("AI summary is already running for this collection.");
+  const run = async () => {
+    await refreshSmartSearchHintsWithLlm(input);
+  };
+
+  if (force) {
+    run().catch(() => {});
     return;
   }
 
-  if (!Array.isArray(collection.items) || collection.items.length < 2) {
-    showCloudMessage("至少需要 2 条链接才能生成中文摘要。", true);
+  searchLlmDebounceTimer = setTimeout(() => {
+    run().catch(() => {});
+  }, SEARCH_LLM_DEBOUNCE_MS);
+}
+
+async function refreshSmartSearchHintsWithLlm(input) {
+  const requestId = ++searchLlmRequestId;
+  const activeQuery = String(input || "").trim().toLowerCase();
+  if (!activeQuery) {
     return;
   }
 
   const aiConfig = await getAiConfig();
-
-  if (!aiConfig.apiKey) {
-    showCloudMessage("请先在 AI Notes 区填写并保存 API Key。", true);
+  if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+    if (searchConfig.llmStrictMode) {
+      smartSearchHints = applySmartSearchOverrides(createNeutralSmartSearchHints(activeQuery), smartSearchOverrides);
+      renderCollections();
+      renderSearchResults();
+      renderSmartSearchChips();
+    }
+    if (!searchLlmMissingConfigNotified) {
+      showCloudMessage(
+        searchConfig.llmStrictMode
+          ? "LLM search needs API Key + Base URL + Model. NL enhancement is paused (strict mode)."
+          : "LLM search needs API Key + Base URL + Model. Using local parse fallback.",
+        true
+      );
+      searchLlmMissingConfigNotified = true;
+    }
     return;
   }
 
-  aiSummaryBusyCollectionIds.add(collection.id);
-  renderCollections();
-  showCloudMessage("正在生成 AI Notes，请稍候…");
-  elements.systemActionStatus.classList.add("loading");
-  try {
-    const suggestion = await generateCollectionSummaryWithLlm(collection, aiConfig);
-    const preview = `建议备注：\n${suggestion.notes}\n\n确认应用到当前列表吗？`;
-    const approved = confirm(preview);
+  searchLlmMissingConfigNotified = false;
 
-    if (!approved) {
-      showCloudMessage("已取消应用 AI 建议。");
+  try {
+    const llmHints = await parseSmartSearchQueryWithLlm(activeQuery, aiConfig, {
+      strictMode: searchConfig.llmStrictMode
+    });
+    if (requestId !== searchLlmRequestId || activeQuery !== query) {
       return;
     }
 
-    collection.notes = suggestion.notes || collection.notes;
-    touchCollectionModified(collection);
-    await persistAndRender();
-    showCloudMessage("已应用 AI 生成的中文 Notes。");
-  } catch (error) {
-    showCloudMessage(`AI 生成失败：${formatCloudError(error)}`, true);
-  } finally {
-    aiSummaryBusyCollectionIds.delete(collection.id);
-    elements.systemActionStatus.classList.remove("loading");
+    const localHints = parseSmartSearchQuery(activeQuery);
+    smartSearchOverrides = getSmartSearchOverrides(activeQuery);
+    smartSearchHints = applySmartSearchOverrides(mergeSmartSearchHints(localHints, llmHints), smartSearchOverrides);
     renderCollections();
+    renderSearchResults();
+    renderSmartSearchChips();
+  } catch (error) {
+    if (requestId !== searchLlmRequestId || activeQuery !== query) {
+      return;
+    }
+    if (searchConfig.llmStrictMode) {
+      smartSearchHints = applySmartSearchOverrides(createNeutralSmartSearchHints(activeQuery), smartSearchOverrides);
+      renderCollections();
+      renderSearchResults();
+      renderSmartSearchChips();
+    }
+    showCloudMessage(
+      searchConfig.llmStrictMode
+        ? `LLM parse failed. NL enhancement paused (strict mode): ${formatCloudError(error)}`
+        : `LLM parse failed, fallback active: ${formatCloudError(error)}`,
+      true
+    );
   }
 }
 
-async function generateCollectionSummaryWithLlm(collection, aiConfig) {
-  const sampleLines = buildCollectionSampleLines(collection.items, 40);
+function mergeSmartSearchHints(localHints, llmHints) {
+  const merged = cloneSmartSearchHints(llmHints);
+  if (!merged.host) {
+    merged.host = localHints.host;
+  }
+  if (!merged.dateFrom) {
+    merged.dateFrom = localHints.dateFrom;
+  }
+  if (!merged.dateTo) {
+    merged.dateTo = localHints.dateTo;
+  }
+
+  if (!Array.isArray(merged.keywords) || merged.keywords.length === 0) {
+    merged.keywords = [...localHints.keywords];
+  }
+
+  if (!Array.isArray(merged.expandedTerms) || merged.expandedTerms.length === 0) {
+    merged.expandedTerms = [...localHints.expandedTerms];
+  }
+
+  merged.hasDerivedFilter = Boolean(merged.host || merged.dateFrom || merged.dateTo || merged.keywords.length > 0);
+  return merged;
+}
+
+async function parseSmartSearchQueryWithLlm(input, aiConfig, options = {}) {
+  const strictMode = Boolean(options.strictMode);
+  const cacheKey = `${aiConfig.baseUrl}|${aiConfig.model}|${input}`;
+  const cached = smartSearchLlmCache.get(cacheKey);
+  if (cached) {
+    smartSearchLlmCache.delete(cacheKey);
+    smartSearchLlmCache.set(cacheKey, cached);
+    return cloneSmartSearchHints(cached);
+  }
+
+  const today = toDateInputValue(new Date());
   const systemPrompt =
-    "你是一个中文信息整理助手。请根据链接标题和来源，输出简洁、可读、可执行的中文总结。不要编造未出现的信息。";
+    "You are a search query parser for a browser link manager. Convert user intent into structured filters and keywords.";
   const userPrompt = [
-    "请基于下面链接样本，生成 JSON：",
-    '{"notes":"2到4行中文备注，每行一句，避免空话"}',
-    "要求：",
-    "1) notes 必须是中文，信息密度高；",
-    "2) 不要出现“根据以上内容”等套话；",
-    "3) 不要输出 JSON 以外内容。",
-    "",
-    `Collection 当前名称: ${collection.name || "Untitled"}`,
-    `链接数: ${collection.items.length}`,
-    "样本：",
-    ...sampleLines
+    `Today is ${today}.`,
+    "Return strict JSON only with keys:",
+    '{"keywords":[],"expanded_terms":[],"host":"","date_from":"","date_to":""}',
+    "Rules:",
+    "1) keywords: 1-8 concise terms in user language.",
+    "2) expanded_terms: optional synonyms/related tokens to improve recall.",
+    "3) host: domain only (e.g. github.com), empty if unknown.",
+    "4) date_from/date_to: YYYY-MM-DD; resolve relative time like last week/recent 7 days.",
+    "5) Never include prose.",
+    `Query: ${input}`
   ].join("\n");
 
+  const parsed = await requestLlmJson(aiConfig, systemPrompt, userPrompt);
+  const hints = normalizeLlmSmartSearchResult(parsed, input, { strictMode });
+  smartSearchLlmCache.set(cacheKey, hints);
+
+  if (smartSearchLlmCache.size > SMART_SEARCH_CACHE_LIMIT) {
+    const oldestKey = smartSearchLlmCache.keys().next().value;
+    if (oldestKey) {
+      smartSearchLlmCache.delete(oldestKey);
+    }
+  }
+
+  return cloneSmartSearchHints(hints);
+}
+
+function getCachedLlmHintsForQuery(input) {
+  const normalized = String(input || "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const entries = Array.from(smartSearchLlmCache.entries());
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const [key, hints] = entries[index];
+    if (key.endsWith(`|${normalized}`)) {
+      return cloneSmartSearchHints(hints);
+    }
+  }
+
+  return null;
+}
+
+function normalizeLlmSmartSearchResult(raw, rawInput, options = {}) {
+  const strictMode = Boolean(options.strictMode);
+  const localFallback = strictMode ? createNeutralSmartSearchHints(rawInput) : parseSmartSearchQuery(rawInput);
+  const keywordText = Array.isArray(raw?.keywords) ? raw.keywords.join(" ") : "";
+  const normalizedKeywords = tokenizeSearchInput(keywordText).slice(0, 8);
+
+  const extraTerms = Array.isArray(raw?.expanded_terms) ? tokenizeSearchInput(raw.expanded_terms.join(" ")) : [];
+  const expandedFromKeywords = expandSearchTerms(normalizedKeywords);
+  const expandedTerms = Array.from(new Set([...normalizedKeywords, ...expandedFromKeywords, ...extraTerms])).slice(0, 20);
+
+  const host = normalizeDomain(raw?.host) || "";
+  const dateFrom = normalizeDateString(raw?.date_from);
+  const dateTo = normalizeDateString(raw?.date_to);
+
+  return {
+    rawInput: String(rawInput || "").trim().toLowerCase(),
+    keywords: normalizedKeywords.length > 0 ? normalizedKeywords : localFallback.keywords,
+    expandedTerms: expandedTerms.length > 0 ? expandedTerms : localFallback.expandedTerms,
+    host: host || localFallback.host,
+    dateFrom: dateFrom || localFallback.dateFrom,
+    dateTo: dateTo || localFallback.dateTo,
+    hasDerivedFilter: true
+  };
+}
+
+function normalizeDomain(value) {
+  const domain = String(value || "").trim().toLowerCase();
+  return /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/.test(domain) ? domain : "";
+}
+
+function normalizeDateString(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return "";
+  }
+  const ts = Date.parse(`${text}T00:00:00`);
+  return Number.isFinite(ts) ? text : "";
+}
+
+function createNeutralSmartSearchHints(rawInput) {
+  return {
+    rawInput: String(rawInput || "").trim().toLowerCase(),
+    keywords: [],
+    expandedTerms: [],
+    host: "",
+    dateFrom: "",
+    dateTo: "",
+    hasDerivedFilter: false
+  };
+}
+
+async function requestLlmJson(aiConfig, systemPrompt, userPrompt) {
   const response = await fetch(`${aiConfig.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -2197,8 +2402,7 @@ async function generateCollectionSummaryWithLlm(collection, aiConfig) {
     },
     body: JSON.stringify({
       model: aiConfig.model,
-      temperature: 0.3,
-      response_format: { type: "json_object" },
+      temperature: 0.1,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -2215,48 +2419,279 @@ async function generateCollectionSummaryWithLlm(collection, aiConfig) {
   const content = data?.choices?.[0]?.message?.content;
 
   if (!content || typeof content !== "string") {
-    throw new Error("LLM 返回为空。");
+    throw new Error("LLM returned empty content.");
   }
 
-  const parsed = parseLlmJson(content);
-  const notes = String(parsed.notes || "").trim();
-
-  if (!notes) {
-    throw new Error("LLM 返回缺少 notes。");
-  }
-
-  return { notes };
+  return parseLlmJson(content);
 }
 
-function buildCollectionSampleLines(items, limit = 40) {
-  return items.slice(0, limit).map((item, index) => {
-    const host = getHost(item.url || "");
-    const safeTitle = String(item.title || item.url || "").replace(/\s+/g, " ").trim();
-    let path = "/";
+function createEmptySearchEnhancementIndex() {
+  return {
+    version: 1,
+    items: {}
+  };
+}
 
-    try {
-      path = new URL(item.url).pathname || "/";
-    } catch {}
+function normalizeSearchEnhancementIndex(rawIndex) {
+  if (!rawIndex || typeof rawIndex !== "object") {
+    return createEmptySearchEnhancementIndex();
+  }
 
-    return `${index + 1}. [${host}] ${safeTitle} | ${path}`;
+  const rawItems = rawIndex.items && typeof rawIndex.items === "object" ? rawIndex.items : {};
+  const normalizedItems = {};
+
+  for (const [url, value] of Object.entries(rawItems)) {
+    const normalizedUrl = String(url || "").trim();
+    if (!normalizedUrl) {
+      continue;
+    }
+    normalizedItems[normalizedUrl] = normalizeSearchEnhancementEntry(value);
+  }
+
+  return {
+    version: 1,
+    items: normalizedItems
+  };
+}
+
+function normalizeSearchEnhancementEntry(rawEntry) {
+  const next = rawEntry && typeof rawEntry === "object" ? rawEntry : {};
+  const keywords = Array.isArray(next.keywords) ? tokenizeSearchInput(next.keywords.join(" ")) : [];
+  const entities = Array.isArray(next.entities) ? tokenizeSearchInput(next.entities.join(" ")) : [];
+
+  return {
+    processedAt: String(next.processedAt || ""),
+    model: String(next.model || ""),
+    cleanTitle: truncateText(next.cleanTitle, 180),
+    summary: truncateText(next.summary, 220),
+    keywords: Array.from(new Set(keywords)).slice(0, 16),
+    entities: Array.from(new Set(entities)).slice(0, 16),
+    intent: truncateText(next.intent, 40).toLowerCase(),
+    language: truncateText(next.language, 20).toLowerCase()
+  };
+}
+
+function truncateText(value, maxLength) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.slice(0, maxLength);
+}
+
+async function loadSearchEnhancementIndex() {
+  const result = await chrome.storage.local.get(SEARCH_ENHANCEMENT_INDEX_KEY);
+  searchEnhancementIndex = normalizeSearchEnhancementIndex(result[SEARCH_ENHANCEMENT_INDEX_KEY]);
+}
+
+async function saveSearchEnhancementIndex() {
+  await chrome.storage.local.set({
+    [SEARCH_ENHANCEMENT_INDEX_KEY]: searchEnhancementIndex
   });
 }
 
-function parseLlmJson(content) {
-  const trimmed = content.trim();
+function getSearchEnhancementEntry(url) {
+  return searchEnhancementIndex.items[String(url || "").trim()] || null;
+}
 
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
+function getSearchEnhancementTerms(item) {
+  const entry = getSearchEnhancementEntry(item.url);
+  if (!entry) {
+    return [];
+  }
 
-    if (start >= 0 && end > start) {
-      return JSON.parse(trimmed.slice(start, end + 1));
+  return [entry.cleanTitle, entry.summary, entry.intent, entry.language, ...(entry.keywords || []), ...(entry.entities || [])]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+}
+
+function getSearchEnhancementStats() {
+  const urlsInDeck = new Set();
+  for (const space of deck.spaces) {
+    for (const collection of space.collections) {
+      for (const item of collection.items) {
+        if (item?.url) {
+          urlsInDeck.add(item.url);
+        }
+      }
     }
   }
 
-  throw new Error("无法解析 LLM 返回的 JSON。");
+  let processedCount = 0;
+  for (const url of urlsInDeck) {
+    if (getSearchEnhancementEntry(url)) {
+      processedCount += 1;
+    }
+  }
+
+  return {
+    totalCount: urlsInDeck.size,
+    processedCount
+  };
+}
+
+function scheduleSearchEnhancementProcessing(force = false) {
+  if (searchEnhancementTimer) {
+    clearTimeout(searchEnhancementTimer);
+    searchEnhancementTimer = null;
+  }
+
+  const delay = force ? 250 : SEARCH_ENHANCEMENT_COOLDOWN_MS;
+  searchEnhancementTimer = setTimeout(() => {
+    runSearchEnhancementProcessing({ force }).catch(() => {});
+  }, delay);
+}
+
+async function runSearchEnhancementProcessing(options = {}) {
+  if (searchEnhancementBusy) {
+    return;
+  }
+
+  const force = Boolean(options.force);
+  if (!searchConfig.llmPreprocessEnabled && !force) {
+    return;
+  }
+
+  if (!force) {
+    const now = Date.now();
+    if (now - lastSearchInputAt < SEARCH_ENHANCEMENT_IDLE_MS) {
+      scheduleSearchEnhancementProcessing();
+      return;
+    }
+  }
+
+  const aiConfig = await getAiConfig();
+  if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+    return;
+  }
+
+  const candidates = collectSearchEnhancementCandidates(SEARCH_ENHANCEMENT_BATCH_SIZE);
+  if (candidates.length === 0) {
+    if (force) {
+      const stats = getSearchEnhancementStats();
+      showCloudMessage(`LLM preprocessing is up to date (${stats.processedCount}/${stats.totalCount}).`);
+    }
+    return;
+  }
+
+  searchEnhancementBusy = true;
+  elements.runPreprocessButton.disabled = true;
+  elements.systemActionStatus.classList.add("loading");
+
+  let successCount = 0;
+  try {
+    for (const candidate of candidates) {
+      const parsed = await requestSearchEnhancementForItem(candidate, aiConfig);
+      searchEnhancementIndex.items[candidate.url] = normalizeSearchEnhancementEntry({
+        ...parsed,
+        processedAt: new Date().toISOString(),
+        model: aiConfig.model
+      });
+      successCount += 1;
+    }
+
+    if (successCount > 0) {
+      pruneSearchEnhancementIndex();
+      await saveSearchEnhancementIndex();
+      renderCollections();
+      renderSearchResults();
+      const stats = getSearchEnhancementStats();
+      showCloudMessage(`LLM preprocessing indexed ${stats.processedCount}/${stats.totalCount} links.`);
+    }
+  } catch (error) {
+    showCloudMessage(`LLM preprocessing failed: ${formatCloudError(error)}`, true);
+  } finally {
+    searchEnhancementBusy = false;
+    elements.runPreprocessButton.disabled = false;
+    elements.systemActionStatus.classList.remove("loading");
+    const remaining = collectSearchEnhancementCandidates(1).length > 0;
+    if (remaining) {
+      scheduleSearchEnhancementProcessing();
+    }
+  }
+}
+
+function collectSearchEnhancementCandidates(limit = SEARCH_ENHANCEMENT_BATCH_SIZE) {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const space of deck.spaces) {
+    for (const collection of space.collections) {
+      for (const item of collection.items) {
+        if (!item?.url || seen.has(item.url)) {
+          continue;
+        }
+        seen.add(item.url);
+
+        const entry = getSearchEnhancementEntry(item.url);
+        if (entry && entry.processedAt) {
+          continue;
+        }
+
+        candidates.push(item);
+        if (candidates.length >= limit) {
+          return candidates;
+        }
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function pruneSearchEnhancementIndex() {
+  const activeUrls = new Set();
+  for (const space of deck.spaces) {
+    for (const collection of space.collections) {
+      for (const item of collection.items) {
+        if (item?.url) {
+          activeUrls.add(item.url);
+        }
+      }
+    }
+  }
+
+  const entries = Object.entries(searchEnhancementIndex.items).filter(([url]) => activeUrls.has(url));
+  entries.sort((a, b) => Date.parse(b[1]?.processedAt || "") - Date.parse(a[1]?.processedAt || ""));
+  const trimmed = entries.slice(0, 3000);
+  searchEnhancementIndex.items = Object.fromEntries(trimmed);
+}
+
+async function requestSearchEnhancementForItem(item, aiConfig) {
+  const host = getHost(item.url || "");
+  const path = safeUrlPath(item.url);
+  const systemPrompt =
+    "You normalize browser link metadata for high-quality search. Return strict JSON only.";
+  const userPrompt = [
+    "Return JSON with keys:",
+    '{"clean_title":"","summary":"","keywords":[],"entities":[],"intent":"","language":""}',
+    "Rules:",
+    "1) clean_title: concise canonical title.",
+    "2) summary: one-line concise topic.",
+    "3) keywords/entities: lowercase, compact, no duplicates, max 12 each.",
+    "4) intent: one short category (tutorial, bugfix, pricing, docs, news, discussion, tool, repo, other).",
+    "5) language: dominant language code or name.",
+    "No prose outside JSON.",
+    `Title: ${item.title || item.url || ""}`,
+    `Host: ${host}`,
+    `Path: ${path}`,
+    `URL: ${item.url || ""}`
+  ].join("\n");
+
+  const parsed = await requestLlmJson(aiConfig, systemPrompt, userPrompt);
+  return {
+    cleanTitle: parsed.clean_title || "",
+    summary: parsed.summary || "",
+    keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
+    entities: Array.isArray(parsed.entities) ? parsed.entities : [],
+    intent: parsed.intent || "",
+    language: parsed.language || ""
+  };
+}
+
+function safeUrlPath(url) {
+  try {
+    return new URL(url).pathname || "/";
+  } catch {
+    return "/";
+  }
 }
 
 async function openItem(item) {
@@ -2439,11 +2874,16 @@ async function saveAutoSaveControls() {
 async function renderSearchControls() {
   searchConfig = await getSearchConfig();
   elements.smartSearchRelaxToggle.checked = searchConfig.autoRelaxSmartFilters;
+  elements.llmStrictModeToggle.checked = searchConfig.llmStrictMode;
+  elements.llmPreprocessToggle.checked = searchConfig.llmPreprocessEnabled;
+  elements.runPreprocessButton.disabled = searchEnhancementBusy;
 }
 
 async function saveSearchControls() {
   const config = normalizeSearchConfig({
-    autoRelaxSmartFilters: elements.smartSearchRelaxToggle.checked
+    autoRelaxSmartFilters: elements.smartSearchRelaxToggle.checked,
+    llmStrictMode: elements.llmStrictModeToggle.checked,
+    llmPreprocessEnabled: elements.llmPreprocessToggle.checked
   });
 
   await chrome.storage.local.set({
@@ -2451,17 +2891,25 @@ async function saveSearchControls() {
   });
 
   searchConfig = config;
+  recalculateSmartSearchHints();
   renderCollections();
   renderSearchResults();
   renderSmartSearchChips();
+  scheduleLlmSmartSearchRefresh(true);
+  scheduleSearchEnhancementProcessing(true);
   showCloudMessage(
-    config.autoRelaxSmartFilters
-      ? "Smart search auto-relax is on."
-      : "Smart search auto-relax is off."
+    `Smart search updated: auto-relax ${config.autoRelaxSmartFilters ? "on" : "off"}, strict LLM mode ${
+      config.llmStrictMode ? "on" : "off"
+    }, preprocess ${config.llmPreprocessEnabled ? "on" : "off"}.`
   );
 }
 
 function clearSearch() {
+  if (searchLlmDebounceTimer) {
+    clearTimeout(searchLlmDebounceTimer);
+    searchLlmDebounceTimer = null;
+  }
+  searchLlmRequestId += 1;
   query = "";
   smartSearchHints = createEmptySmartSearchHints();
   smartSearchOverrides = createEmptySmartSearchOverrides();
@@ -2489,7 +2937,9 @@ function normalizeAutoSaveConfig(rawConfig) {
 function normalizeSearchConfig(rawConfig) {
   const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
   return {
-    autoRelaxSmartFilters: typeof next.autoRelaxSmartFilters === "boolean" ? next.autoRelaxSmartFilters : true
+    autoRelaxSmartFilters: typeof next.autoRelaxSmartFilters === "boolean" ? next.autoRelaxSmartFilters : true,
+    llmStrictMode: typeof next.llmStrictMode === "boolean" ? next.llmStrictMode : false,
+    llmPreprocessEnabled: typeof next.llmPreprocessEnabled === "boolean" ? next.llmPreprocessEnabled : true
   };
 }
 
@@ -2520,14 +2970,12 @@ async function getAutoSaveMeta() {
 
 function normalizeAiConfig(rawConfig) {
   const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
-  const enabled = typeof next.enabled === "boolean" ? next.enabled : DEFAULT_AI_CONFIG.enabled;
   const provider = next.provider === "minimax" || next.provider === "custom" ? next.provider : "openai";
   const baseUrl = String(next.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim().replace(/\/$/, "");
   const apiKey = String(next.apiKey || "").trim();
   const model = String(next.model || DEFAULT_AI_CONFIG.model).trim();
 
   return {
-    enabled,
     provider,
     baseUrl: baseUrl || DEFAULT_AI_CONFIG.baseUrl,
     apiKey,

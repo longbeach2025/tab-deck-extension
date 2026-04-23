@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.24</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.26</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -91,12 +91,16 @@
 
       <div class="side-section">
         <div class="section-title">
-          <span>AI Notes</span>
+          <span>LLM Search</span>
         </div>
         <div class="cloud-fields">
           <label class="check-row">
-            <input id="aiEnabledToggle" type="checkbox">
-            <span>Enable AI notes generation</span>
+            <input id="llmStrictModeToggle" type="checkbox">
+            <span>Require LLM for NL enhancement</span>
+          </label>
+          <label class="check-row">
+            <input id="llmPreprocessToggle" type="checkbox">
+            <span>Enable background LLM preprocessing</span>
           </label>
           <select id="aiProviderSelect" aria-label="AI provider">
             <option value="openai">Provider: OpenAI</option>
@@ -106,7 +110,8 @@
           <input id="aiBaseUrlInput" type="url" placeholder="LLM API Base URL (e.g. https://api.openai.com/v1)">
           <input id="aiApiKeyInput" type="password" placeholder="LLM API Key">
           <input id="aiModelInput" type="text" placeholder="Model (e.g. gpt-4.1-mini)">
-          <button id="saveAiConfigButton" class="secondary-button">Save AI config</button>
+          <button id="runPreprocessButton" class="secondary-button">Run preprocess now</button>
+          <button id="saveAiConfigButton" class="secondary-button">Save LLM config</button>
         </div>
       </div>
 
@@ -195,7 +200,6 @@
         <div class="collection-top">
           <input class="collection-name" type="text">
           <div class="collection-actions">
-            <button class="icon-button suggest-summary" title="Generate Chinese notes" aria-label="Generate Chinese notes">G</button>
             <button class="icon-button open-all" title="Open all links" aria-label="Open all links">O</button>
             <button class="icon-button delete-collection" title="Delete collection" aria-label="Delete collection">D</button>
           </div>

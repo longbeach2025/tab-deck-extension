@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.24`
+- 开发版：`v0.2.0-alpha.26`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.24` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.24/tab-deck-extension-v0.2.0-alpha.24.zip)
+- [`v0.2.0-alpha.26` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.26/tab-deck-extension-v0.2.0-alpha.26.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.24`）
+## 核心功能（截至 `v0.2.0-alpha.26`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -40,16 +40,15 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - link 记录 `addedAt / lastModifiedAt / lastOpenedAt`。
   - Toby 导入数据标记时间来源（`Imported time`），避免误认为原始创建时间。
   - 展示层不再对每条 URL 显示 `Exact time` 徽标，避免时间语义噪音。
-- AI 中文摘要（可选）：
-  - Collection 卡片 `G` 按钮可调用 LLM 生成更可读的中文 `Notes`。
-  - 先预览再确认应用，不会静默覆盖。
-  - 侧栏 `AI Notes` 固定预设：`OpenAI / MiniMax Intl`，其余走 `Custom`。
-  - 支持 AI 开关（禁用后 `G` 按钮自动不可用）。
-  - 按所选 Provider 填写 API Base URL / API Key / Model 即可使用。
-  - 默认已包含 `https://api.openai.com/*` 和 `https://api.minimax.io/*` host 权限；若使用其他 API 域名，需在 `manifest.json` 增加对应 host 权限后重载扩展。
+- LLM 搜索增强（可选）：
+  - 侧栏 `LLM Search` 可配置 `Provider / API Base URL / API Key / Model`。
+  - 支持严格模式开关：`Require LLM for NL enhancement`（开启后无 LLM 不做 NL 增强）。
+  - 自然语言查询会调用 LLM 做结构化解析（关键词、域名、时间范围），并与本地检索融合。
+  - 支持后台预处理索引：`Enable background LLM preprocessing` + `Run preprocess now`。
+  - 解析结果会展示为可编辑 chips，支持一键删除条件并即时重算。
 - 左侧布局优化：
   - 新增统一 `Status Center` 展示动作反馈、同步状态和错误信息。
-  - `Save AI config` 会在状态区给出明确成功提示（附时间）。
+  - `Save LLM config` 会在状态区给出明确成功提示（附时间）。
 
 ## 安装方式
 
@@ -105,7 +104,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.24`。
+2. 安装 `v0.2.0-alpha.26`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -323,6 +322,28 @@ alter table public.tab_deck_links
 - 条件删除支持按 query 记忆：
   - 对同一条查询语句移除过的条件会在当前会话中保留。
   - 搜索为空时会自动清空当前生效条件状态。
+
+### `v0.2.0-alpha.25` (LLM-driven NL Search)
+
+- 移除已证伪的 AI Collection Notes 功能：
+  - 移除 Collection 卡片 `G` 按钮与对应生成逻辑。
+  - 保留 `Notes` 字段作为手动记录，不再自动生成内容。
+- NL 搜索改为 LLM 主驱动解析：
+  - 每次自然语言输入会优先调用 LLM 解析结构化条件（关键词、host、日期范围）。
+  - 解析结果与本地规则结果合并，避免纯规则命中不足。
+  - 解析失败时自动回退到本地规则，不中断搜索流程。
+- AI 配置区改为 `LLM Search`：
+  - 统一用于 NL 搜索解析配置，不再用于 collection notes 生成。
+
+### `v0.2.0-alpha.26` (Background LLM Preprocess Index)
+
+- 新增“后台 LLM 预处理索引”：
+  - 在空闲时段批量处理链接，为每条链接生成 `clean title / one-line summary / keywords / entities / intent / language`。
+  - 预处理结果保存在本地索引（不改动原始链接数据结构），搜索时自动融合这些特征。
+  - 新增 `Run preprocess now` 手动触发按钮，可立即执行一轮处理。
+- 新增 NL 增强严格模式：
+  - `Require LLM for NL enhancement` 开启后，若 LLM 不可用则暂停 NL 增强，不再回退到本地 NL 解析。
+  - 基础关键词搜索仍可用，避免完全不可搜索。
 
 ## 构建与打包
 
