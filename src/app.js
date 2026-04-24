@@ -16,8 +16,10 @@ import {
   tabToItem
 } from "./storage.js";
 import {
+  fetchCloudLinkEmbeddings,
   getCloudConfig,
   getCloudUser,
+  importInitBundleToCloud,
   formatCloudError,
   saveCloudConfig,
   signInCloud,
@@ -34,24 +36,53 @@ let smartSearchOverrides = createEmptySmartSearchOverrides();
 let searchLlmDebounceTimer = null;
 let searchLlmRequestId = 0;
 let searchLlmMissingConfigNotified = false;
+let vectorSearchDebounceTimer = null;
+let vectorSearchRequestId = 0;
+let vectorSearchState = createDefaultVectorSearchState();
 let searchEnhancementIndex = createEmptySearchEnhancementIndex();
+let searchEnhancementMeta = createDefaultSearchEnhancementMeta();
 let searchEnhancementBusy = false;
-let searchEnhancementTimer = null;
-let lastSearchInputAt = 0;
+let searchEnhancementRunState = null;
 let searchConfig = {
   autoRelaxSmartFilters: true,
   llmStrictMode: false,
-  llmPreprocessEnabled: true
+  preprocessFastMode: true
 };
 const SMART_SEARCH_CACHE_LIMIT = 100;
 const SEARCH_LLM_DEBOUNCE_MS = 420;
+const VECTOR_SEARCH_DEBOUNCE_MS = 260;
+const VECTOR_CANDIDATE_LIMIT = 260;
+const VECTOR_TOPK_LIMIT = 80;
+const VECTOR_PRIORITY_MAX_RESULTS = 300;
+const VECTOR_MIX_WEIGHT = 12;
+const VECTOR_SEARCH_CACHE_LIMIT = 80;
+const VECTOR_EMBEDDING_MODEL_DEFAULT = "text-embedding-3-small";
+const VECTOR_SEARCH_DEBUG = false;
+const PRIVATE_INIT_OWNER_SALT = "tabdeck-private-init-v1";
+const PRIVATE_INIT_ALLOWED_USER_HASHES = new Set(["8d28328b26f7628a2028865501ec928ce01e6a3ffbbb9e8e7a83813763318d56"]);
 const SEARCH_ENHANCEMENT_INDEX_KEY = "tabDeckSearchEnhancementIndex";
-const SEARCH_ENHANCEMENT_BATCH_SIZE = 6;
-const SEARCH_ENHANCEMENT_IDLE_MS = 9000;
-const SEARCH_ENHANCEMENT_COOLDOWN_MS = 45000;
+const SEARCH_ENHANCEMENT_META_KEY = "tabDeckSearchEnhancementMeta";
+const SEARCH_ENHANCEMENT_BATCH_SIZE = 200;
+const SEARCH_ENHANCEMENT_REQUEST_ITEM_LIMIT = 20;
+const SEARCH_ENHANCEMENT_WORKER_COUNT = 2;
+const SEARCH_ENHANCEMENT_MAX_RETRIES = 2;
+const SEARCH_ENHANCEMENT_RETRY_BASE_MS = 1200;
+const SEARCH_ENHANCEMENT_REQUEST_GAP_MS = 80;
+const SEARCH_ENHANCEMENT_FAST_REQUEST_ITEM_LIMIT = 30;
+const SEARCH_ENHANCEMENT_FAST_WORKER_COUNT = 3;
+const SEARCH_ENHANCEMENT_FAST_MAX_RETRIES = 1;
+const SEARCH_ENHANCEMENT_FAST_REQUEST_GAP_MS = 40;
+const SEARCH_ENHANCEMENT_RATE_LIMIT_COOLDOWN_MS = 6000;
+const SEARCH_ENHANCEMENT_MAX_RATE_LIMIT_STREAK = 4;
+const SEARCH_ENHANCEMENT_MINIMAX_FAST_REQUEST_ITEM_LIMIT = 12;
+const SEARCH_ENHANCEMENT_MINIMAX_FAST_WORKER_COUNT = 2;
+const SEARCH_ENHANCEMENT_MINIMAX_FAST_MAX_RETRIES = 1;
+const SEARCH_ENHANCEMENT_MINIMAX_FAST_REQUEST_GAP_MS = 90;
 const smartSearchCache = new Map();
 const smartSearchOverrideCache = new Map();
 const smartSearchLlmCache = new Map();
+const vectorQueryEmbeddingCache = new Map();
+const vectorItemEmbeddingCache = new Map();
 const searchFilters = {
   spaceId: "all",
   collection: "",
@@ -171,6 +202,9 @@ const elements = {
   exportDeckButton: document.querySelector("#exportDeckButton"),
   importDeckButton: document.querySelector("#importDeckButton"),
   importDeckInput: document.querySelector("#importDeckInput"),
+  privateInitSection: document.querySelector("#privateInitSection"),
+  importPrivateInitButton: document.querySelector("#importPrivateInitButton"),
+  importPrivateInitInput: document.querySelector("#importPrivateInitInput"),
   aiProviderSelect: document.querySelector("#aiProviderSelect"),
   aiBaseUrlInput: document.querySelector("#aiBaseUrlInput"),
   aiApiKeyInput: document.querySelector("#aiApiKeyInput"),
@@ -185,8 +219,11 @@ const elements = {
   searchSortSelect: document.querySelector("#searchSortSelect"),
   smartSearchRelaxToggle: document.querySelector("#smartSearchRelaxToggle"),
   llmStrictModeToggle: document.querySelector("#llmStrictModeToggle"),
-  llmPreprocessToggle: document.querySelector("#llmPreprocessToggle"),
+  preprocessFastModeToggle: document.querySelector("#preprocessFastModeToggle"),
   runPreprocessButton: document.querySelector("#runPreprocessButton"),
+  preprocessProgressBar: document.querySelector("#preprocessProgressBar"),
+  preprocessProgressText: document.querySelector("#preprocessProgressText"),
+  preprocessLastFull: document.querySelector("#preprocessLastFull"),
   smartSearchChips: document.querySelector("#smartSearchChips"),
   clearSearchFiltersButton: document.querySelector("#clearSearchFiltersButton"),
   spaceList: document.querySelector("#spaceList"),
@@ -227,12 +264,12 @@ async function init() {
   await renderAutoSaveControls();
   await renderSearchControls();
   await loadSearchEnhancementIndex();
-  scheduleSearchEnhancementProcessing();
+  await loadSearchEnhancementMeta();
+  renderSearchEnhancementProgress();
 }
 
 function bindEvents() {
   elements.searchInput.addEventListener("input", (event) => {
-    lastSearchInputAt = Date.now();
     query = event.target.value.trim().toLowerCase();
     recalculateSmartSearchHints();
     renderCollections();
@@ -271,7 +308,7 @@ function bindEvents() {
   });
   elements.smartSearchRelaxToggle.addEventListener("change", saveSearchControls);
   elements.llmStrictModeToggle.addEventListener("change", saveSearchControls);
-  elements.llmPreprocessToggle.addEventListener("change", saveSearchControls);
+  elements.preprocessFastModeToggle.addEventListener("change", saveSearchControls);
   elements.runPreprocessButton.addEventListener("click", () => runSearchEnhancementProcessing({ force: true }));
   elements.clearSearchFiltersButton.addEventListener("click", clearSearchFilters);
 
@@ -295,6 +332,8 @@ function bindEvents() {
   elements.exportDeckButton.addEventListener("click", exportDeckBackup);
   elements.importDeckButton.addEventListener("click", () => elements.importDeckInput.click());
   elements.importDeckInput.addEventListener("change", importDeckBackup);
+  elements.importPrivateInitButton.addEventListener("click", () => elements.importPrivateInitInput.click());
+  elements.importPrivateInitInput.addEventListener("change", importPrivateInitBundleFromFile);
   elements.aiProviderSelect.addEventListener("change", onAiProviderChanged);
   elements.saveAiConfigButton.addEventListener("click", saveAiConfig);
 }
@@ -321,6 +360,12 @@ function bindStorageSyncEvents() {
       await loadSearchEnhancementIndex();
       renderCollections();
       renderSearchResults();
+      renderSearchEnhancementProgress();
+    }
+
+    if (areaName === "local" && changes[SEARCH_ENHANCEMENT_META_KEY]) {
+      await loadSearchEnhancementMeta();
+      renderSearchEnhancementProgress();
     }
   });
 }
@@ -361,7 +406,6 @@ function render() {
   renderRecentlyDeleted();
   renderSearchResults();
   renderCollections();
-  scheduleSearchEnhancementProcessing();
 }
 
 function renderStats() {
@@ -382,11 +426,14 @@ function renderStats() {
 async function renderCloudControls() {
   const config = await getCloudConfig();
   const user = await getCloudUser().catch(() => null);
+  const canUsePrivateInit = await isPrivateInitAllowedUser(user);
   elements.cloudUrlInput.value = config.supabaseUrl;
   elements.cloudAnonKeyInput.value = config.anonKey;
   elements.cloudSignedIn.textContent = user ? `Signed in as: ${user.email || user.id}` : "Signed in as: Not signed in";
   elements.signOutCloudButton.disabled = !user;
   elements.syncNowButton.disabled = !user;
+  elements.privateInitSection.classList.toggle("hidden", !canUsePrivateInit);
+  elements.importPrivateInitButton.disabled = !canUsePrivateInit;
   renderCloudDetails();
 }
 
@@ -413,7 +460,6 @@ async function saveAiConfig() {
   await renderAiControls();
   showCloudMessage("LLM search config saved.");
   scheduleLlmSmartSearchRefresh(true);
-  scheduleSearchEnhancementProcessing(true);
 }
 
 function onAiProviderChanged() {
@@ -717,6 +763,14 @@ function renderSearchResults() {
     elements.searchResults.append(hint);
   }
 
+  const vectorMeta = getVectorSearchMetaLabel(searchState);
+  if (vectorMeta) {
+    const hint = document.createElement("p");
+    hint.className = "muted compact";
+    hint.textContent = vectorMeta;
+    elements.searchResults.append(hint);
+  }
+
   if (searchState.fallbackLabel) {
     const fallback = document.createElement("p");
     fallback.className = "muted compact";
@@ -729,6 +783,7 @@ function renderSearchResults() {
     empty.className = "muted compact";
     empty.textContent = "No matching links.";
     elements.searchResults.append(empty);
+    scheduleVectorSearchRerank(searchState);
     return;
   }
 
@@ -793,6 +848,7 @@ function renderSearchResults() {
   }
 
   elements.searchResults.append(list);
+  scheduleVectorSearchRerank(searchState);
 }
 
 function buildSearchResults() {
@@ -800,33 +856,49 @@ function buildSearchResults() {
   const baseResults = collectSearchResults(baseCriteria);
 
   if (baseResults.length > 0) {
-    return {
-      results: sortSearchResults(baseResults, baseCriteria.terms.length > 0),
-      fallbackLabel: ""
-    };
+    return finalizeSearchResults(baseResults, baseCriteria, "");
   }
 
   const fallbackPlans = createFallbackSearchPlans(baseCriteria);
   if (fallbackPlans.length === 0) {
     return {
       results: [],
-      fallbackLabel: ""
+      fallbackLabel: "",
+      criteria: baseCriteria,
+      vectorSignature: "",
+      vectorApplied: false,
+      vectorPending: false
     };
   }
 
   for (const plan of fallbackPlans) {
     const fallbackResults = collectSearchResults(plan.criteria);
     if (fallbackResults.length > 0) {
-      return {
-        results: sortSearchResults(fallbackResults, plan.criteria.terms.length > 0),
-        fallbackLabel: plan.label
-      };
+      return finalizeSearchResults(fallbackResults, plan.criteria, plan.label);
     }
   }
 
   return {
     results: [],
-    fallbackLabel: ""
+    fallbackLabel: "",
+    criteria: baseCriteria,
+    vectorSignature: "",
+    vectorApplied: false,
+    vectorPending: false
+  };
+}
+
+function finalizeSearchResults(rawResults, criteria, fallbackLabel = "") {
+  const sorted = sortSearchResults(rawResults, criteria.terms.length > 0);
+  const vectorSignature = createVectorSearchSignature(criteria, sorted);
+  const vectorReranked = applyVectorSearchScores(sorted, vectorSignature);
+  return {
+    results: vectorReranked.results,
+    fallbackLabel,
+    criteria,
+    vectorSignature,
+    vectorApplied: vectorReranked.applied,
+    vectorPending: vectorReranked.pending
   };
 }
 
@@ -929,6 +1001,464 @@ function sortSearchResults(results, hasSearchTerms) {
   }
 
   return results;
+}
+
+function createDefaultVectorSearchState() {
+  return {
+    signature: "",
+    status: "idle",
+    scoresByItemId: {},
+    rankedItemIds: [],
+    strategy: "mix",
+    appliedCount: 0,
+    topKCount: 0,
+    model: "",
+    error: ""
+  };
+}
+
+function createVectorSearchSignature(criteria, results) {
+  if (!shouldRunVectorSearch(criteria, results)) {
+    return "";
+  }
+
+  const candidateIds = results
+    .slice(0, VECTOR_CANDIDATE_LIMIT)
+    .map((result) => result?.item?.id)
+    .filter(Boolean)
+    .join(",");
+
+  return JSON.stringify({
+    q: query,
+    terms: criteria.terms,
+    host: criteria.host || "",
+    dateFrom: criteria.dateFrom || "",
+    dateTo: criteria.dateTo || "",
+    sort: searchFilters.sortBy,
+    candidates: candidateIds
+  });
+}
+
+function shouldRunVectorSearch(criteria, results) {
+  if (searchFilters.sortBy !== "recent_activity") {
+    return false;
+  }
+  if (!Array.isArray(results) || results.length === 0) {
+    return false;
+  }
+  if (!String(query || "").trim()) {
+    return false;
+  }
+
+  const hasTerms = Array.isArray(criteria?.terms) && criteria.terms.length > 0;
+  const hasStructuredFilter = Boolean(criteria?.host || criteria?.dateFrom || criteria?.dateTo || searchFilters.collection);
+  return hasTerms || hasStructuredFilter;
+}
+
+function applyVectorSearchScores(results, signature) {
+  if (!signature || searchFilters.sortBy !== "recent_activity") {
+    return { results, applied: false, pending: false };
+  }
+
+  const sameSignature = vectorSearchState.signature === signature;
+  const pending = sameSignature && vectorSearchState.status === "running";
+  const canApply = sameSignature && vectorSearchState.status === "ready";
+
+  if (!canApply) {
+    return { results, applied: false, pending };
+  }
+
+  const rankByItemId = new Map((vectorSearchState.rankedItemIds || []).map((itemId, index) => [itemId, index]));
+  const scoresByItemId = vectorSearchState.scoresByItemId || {};
+  const strategy = vectorSearchState.strategy || "mix";
+  const reranked = [...results];
+  reranked.sort((a, b) => {
+    const aRank = rankByItemId.has(a.item.id) ? rankByItemId.get(a.item.id) : Number.POSITIVE_INFINITY;
+    const bRank = rankByItemId.has(b.item.id) ? rankByItemId.get(b.item.id) : Number.POSITIVE_INFINITY;
+    if (strategy === "priority" && aRank !== bRank) {
+      return aRank - bRank;
+    }
+
+    const aVector = Number(scoresByItemId[a.item.id]);
+    const bVector = Number(scoresByItemId[b.item.id]);
+    if (Number.isFinite(aVector) || Number.isFinite(bVector)) {
+      if (Number.isFinite(aVector) && Number.isFinite(bVector) && aVector !== bVector) {
+        return bVector - aVector;
+      }
+      if (Number.isFinite(aVector) && !Number.isFinite(bVector)) {
+        return -1;
+      }
+      if (!Number.isFinite(aVector) && Number.isFinite(bVector)) {
+        return 1;
+      }
+    }
+
+    return b.score - a.score || getItemActivityTimestamp(b.item) - getItemActivityTimestamp(a.item);
+  });
+  return {
+    results: reranked,
+    applied: true,
+    pending: false
+  };
+}
+
+function getVectorSearchMetaLabel(searchState) {
+  if (!query || !searchState?.vectorSignature || searchFilters.sortBy !== "recent_activity") {
+    return "";
+  }
+
+  if (searchState.vectorApplied) {
+    const strategyLabel = vectorSearchState.strategy === "priority" ? "priority" : "mix";
+    return `Vector recall: ${strategyLabel} Top ${vectorSearchState.topKCount || 0} (${vectorSearchState.appliedCount} scored).`;
+  }
+  if (searchState.vectorPending) {
+    return "Vector recall: computing...";
+  }
+  if (vectorSearchState.signature === searchState.vectorSignature && vectorSearchState.status === "failed") {
+    return `Vector recall: fallback lexical only (${vectorSearchState.error || "embedding unavailable"}).`;
+  }
+  return "Vector recall: lexical baseline.";
+}
+
+function scheduleVectorSearchRerank(searchState) {
+  if (vectorSearchDebounceTimer) {
+    clearTimeout(vectorSearchDebounceTimer);
+    vectorSearchDebounceTimer = null;
+  }
+
+  const signature = searchState?.vectorSignature || "";
+  if (!signature || searchFilters.sortBy !== "recent_activity") {
+    return;
+  }
+
+  if (vectorSearchState.signature === signature && (vectorSearchState.status === "running" || vectorSearchState.status === "ready")) {
+    return;
+  }
+
+  const candidates = (searchState.results || []).slice(0, VECTOR_CANDIDATE_LIMIT);
+  if (candidates.length === 0) {
+    return;
+  }
+  const totalResultCount = Array.isArray(searchState.results) ? searchState.results.length : candidates.length;
+
+  vectorSearchDebounceTimer = setTimeout(() => {
+    runVectorSearchRerank(signature, searchState.criteria, candidates, totalResultCount).catch(() => {});
+  }, VECTOR_SEARCH_DEBOUNCE_MS);
+}
+
+async function runVectorSearchRerank(signature, criteria, candidates, totalResultCount = candidates.length) {
+  const requestId = ++vectorSearchRequestId;
+  const startedAt = Date.now();
+  const lexicalTop = candidates.slice(0, 5).map((entry) => ({
+    id: entry?.item?.id || "",
+    title: String(entry?.item?.title || "").slice(0, 80),
+    score: Number(entry?.score || 0).toFixed(2)
+  }));
+  vectorSearchState = {
+    signature,
+    status: "running",
+    scoresByItemId: {},
+    rankedItemIds: [],
+    strategy: "mix",
+    appliedCount: 0,
+    topKCount: 0,
+    model: "",
+    error: ""
+  };
+  renderSearchResults();
+
+  try {
+    const aiConfig = await getAiConfig();
+    if (!aiConfig.apiKey || !aiConfig.baseUrl) {
+      throw new Error("LLM config missing.");
+    }
+
+    const embeddingModel = resolveVectorEmbeddingModel(aiConfig);
+    const queryText = buildVectorQueryText(criteria);
+    const queryEmbedding = await getQueryEmbeddingVector(queryText, aiConfig, embeddingModel);
+    const itemEmbeddings = await getCandidateEmbeddings(candidates);
+
+    const scoredCandidates = [];
+    for (const candidate of candidates) {
+      const embedding = itemEmbeddings.get(candidate.item.id);
+      if (!embedding) {
+        continue;
+      }
+      const cosine = cosineSimilarity(queryEmbedding, embedding);
+      if (!Number.isFinite(cosine)) {
+        continue;
+      }
+
+      const normalized = Math.max(0, Math.min(1, (cosine + 1) / 2));
+      scoredCandidates.push({
+        itemId: candidate.item.id,
+        lexicalScore: candidate.score,
+        vectorScore: normalized,
+        activityTs: getItemActivityTimestamp(candidate.item)
+      });
+    }
+
+    if (requestId !== vectorSearchRequestId) {
+      return;
+    }
+
+    if (scoredCandidates.length === 0) {
+      vectorSearchState = {
+        signature,
+        status: "failed",
+        scoresByItemId: {},
+        rankedItemIds: [],
+        strategy: "mix",
+        appliedCount: 0,
+        topKCount: 0,
+        model: embeddingModel,
+        error: "no usable embeddings in candidates"
+      };
+      renderSearchResults();
+      if (VECTOR_SEARCH_DEBUG) {
+        console.info("[vector-search] no-usable-embeddings", {
+          query,
+          signature,
+          candidateCount: candidates.length,
+          elapsedMs: Date.now() - startedAt
+        });
+      }
+      return;
+    }
+
+    scoredCandidates.sort(
+      (a, b) => b.vectorScore - a.vectorScore || b.lexicalScore - a.lexicalScore || b.activityTs - a.activityTs
+    );
+    const strategy = totalResultCount <= VECTOR_PRIORITY_MAX_RESULTS ? "priority" : "mix";
+    const topK = scoredCandidates.slice(0, VECTOR_TOPK_LIMIT);
+    const scoresByItemId = {};
+    const rankedItemIds = [];
+    for (const entry of topK) {
+      scoresByItemId[entry.itemId] =
+        strategy === "priority" ? entry.vectorScore : entry.lexicalScore + entry.vectorScore * VECTOR_MIX_WEIGHT;
+      rankedItemIds.push(entry.itemId);
+    }
+
+    vectorSearchState = {
+      signature,
+      status: "ready",
+      scoresByItemId,
+      rankedItemIds,
+      strategy,
+      appliedCount: scoredCandidates.length,
+      topKCount: topK.length,
+      model: embeddingModel,
+      error: ""
+    };
+    if (VECTOR_SEARCH_DEBUG) {
+      const rerankedTop = scoredCandidates
+        .slice(0, 5)
+        .map((entry) => ({
+          id: entry.itemId,
+          score: Number(entry.vectorScore || 0).toFixed(4)
+        }));
+      console.info("[vector-search] rerank-applied", {
+        query,
+        model: embeddingModel,
+        strategy,
+        totalResultCount,
+        candidateCount: candidates.length,
+        appliedCount: scoredCandidates.length,
+        topKCount: topK.length,
+        elapsedMs: Date.now() - startedAt,
+        lexicalTop,
+        rerankedTop
+      });
+    }
+    renderSearchResults();
+  } catch (error) {
+    if (requestId !== vectorSearchRequestId) {
+      return;
+    }
+    vectorSearchState = {
+      signature,
+      status: "failed",
+      scoresByItemId: {},
+      rankedItemIds: [],
+      strategy: "mix",
+      appliedCount: 0,
+      topKCount: 0,
+      model: "",
+      error: formatCloudError(error)
+    };
+    if (VECTOR_SEARCH_DEBUG) {
+      console.warn("[vector-search] rerank-failed", {
+        query,
+        signature,
+        elapsedMs: Date.now() - startedAt,
+        error: formatCloudError(error),
+        lexicalTop
+      });
+    }
+    renderSearchResults();
+  }
+}
+
+function resolveVectorEmbeddingModel(aiConfig) {
+  const configured = String(aiConfig?.model || "").trim();
+  if (configured.toLowerCase().includes("embedding")) {
+    return configured;
+  }
+  return VECTOR_EMBEDDING_MODEL_DEFAULT;
+}
+
+function buildVectorQueryText(criteria) {
+  const terms = Array.isArray(criteria?.terms) ? criteria.terms.slice(0, 16) : [];
+  const pieces = [query, ...terms];
+  if (criteria?.host) {
+    pieces.push(`host:${criteria.host}`);
+  }
+  if (criteria?.dateFrom || criteria?.dateTo) {
+    pieces.push(`date:${criteria.dateFrom || "?"}..${criteria.dateTo || "?"}`);
+  }
+  return pieces.filter(Boolean).join(" | ");
+}
+
+async function getQueryEmbeddingVector(queryText, aiConfig, model) {
+  const cacheKey = `${aiConfig.baseUrl}|${model}|${queryText}`;
+  const cached = vectorQueryEmbeddingCache.get(cacheKey);
+  if (cached) {
+    vectorQueryEmbeddingCache.delete(cacheKey);
+    vectorQueryEmbeddingCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  const response = await fetch(`${aiConfig.baseUrl}/embeddings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${aiConfig.apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      input: [queryText]
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+  }
+
+  const payload = await response.json();
+  const embedding = payload?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error("Embedding API returned empty vector.");
+  }
+
+  vectorQueryEmbeddingCache.set(cacheKey, embedding);
+  if (vectorQueryEmbeddingCache.size > VECTOR_SEARCH_CACHE_LIMIT) {
+    const oldest = vectorQueryEmbeddingCache.keys().next().value;
+    if (oldest) {
+      vectorQueryEmbeddingCache.delete(oldest);
+    }
+  }
+
+  return embedding;
+}
+
+async function getCandidateEmbeddings(candidates) {
+  const embeddingById = new Map();
+  const missingIds = [];
+
+  for (const candidate of candidates) {
+    const itemId = candidate?.item?.id;
+    if (!itemId) {
+      continue;
+    }
+
+    const localEmbedding = extractItemEmbedding(candidate.item);
+    if (localEmbedding) {
+      rememberVectorItemEmbedding(itemId, localEmbedding);
+      embeddingById.set(itemId, localEmbedding);
+      continue;
+    }
+
+    const cached = vectorItemEmbeddingCache.get(itemId);
+    if (cached) {
+      vectorItemEmbeddingCache.delete(itemId);
+      vectorItemEmbeddingCache.set(itemId, cached);
+      embeddingById.set(itemId, cached);
+      continue;
+    }
+
+    missingIds.push(itemId);
+  }
+
+  if (missingIds.length > 0) {
+    try {
+      const user = await getCloudUser();
+      if (user) {
+        const fetched = await fetchCloudLinkEmbeddings(missingIds);
+        for (const [itemId, embedding] of fetched.entries()) {
+          if (Array.isArray(embedding) && embedding.length > 0) {
+            rememberVectorItemEmbedding(itemId, embedding);
+            embeddingById.set(itemId, embedding);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return embeddingById;
+}
+
+function extractItemEmbedding(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  if (Array.isArray(item.embedding) && item.embedding.length > 0) {
+    return item.embedding;
+  }
+
+  const preprocess = item.preprocess;
+  if (preprocess && Array.isArray(preprocess.embedding) && preprocess.embedding.length > 0) {
+    return preprocess.embedding;
+  }
+
+  return null;
+}
+
+function rememberVectorItemEmbedding(itemId, embedding) {
+  vectorItemEmbeddingCache.set(itemId, embedding);
+  if (vectorItemEmbeddingCache.size > 400) {
+    const oldest = vectorItemEmbeddingCache.keys().next().value;
+    if (oldest) {
+      vectorItemEmbeddingCache.delete(oldest);
+    }
+  }
+}
+
+function cosineSimilarity(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length === 0 || right.length === 0 || left.length !== right.length) {
+    return NaN;
+  }
+
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    const a = Number(left[index]);
+    const b = Number(right[index]);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      continue;
+    }
+    dot += a * b;
+    leftNorm += a * a;
+    rightNorm += b * b;
+  }
+
+  if (leftNorm <= 0 || rightNorm <= 0) {
+    return NaN;
+  }
+  return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
 }
 
 function renderRecentlyDeleted() {
@@ -2162,15 +2692,121 @@ function parseLlmJson(content) {
   try {
     return JSON.parse(trimmed);
   } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
+    const normalizedWhole = normalizeLikelyJsonString(trimmed);
+    if (normalizedWhole) {
+      try {
+        return JSON.parse(normalizedWhole);
+      } catch {}
+    }
 
-    if (start >= 0 && end > start) {
-      return JSON.parse(trimmed.slice(start, end + 1));
+    const fromFence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fromFence?.[1]) {
+      try {
+        return JSON.parse(fromFence[1].trim());
+      } catch {}
+
+      const normalizedFence = normalizeLikelyJsonString(fromFence[1].trim());
+      if (normalizedFence) {
+        try {
+          return JSON.parse(normalizedFence);
+        } catch {}
+      }
+    }
+
+    const extracted = extractFirstJsonObject(trimmed);
+    if (extracted) {
+      try {
+        return JSON.parse(extracted);
+      } catch {}
+
+      const normalizedExtracted = normalizeLikelyJsonString(extracted);
+      if (normalizedExtracted) {
+        return JSON.parse(normalizedExtracted);
+      }
     }
   }
 
   throw new Error("无法解析 LLM 返回的 JSON。");
+}
+
+function normalizeLikelyJsonString(input) {
+  if (!input || typeof input !== "string") {
+    return "";
+  }
+
+  let text = input.trim();
+  if (!text) {
+    return "";
+  }
+
+  // Normalize smart quotes and trim trailing semicolon noise.
+  text = text.replace(/[“”]/g, "\"").replace(/[‘’]/g, "'").replace(/;\s*$/, "");
+  // Quote bare object keys: {foo: 1} / ,bar:
+  text = text.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g, "$1\"$2\"$3");
+  // Convert single-quoted strings to double-quoted JSON strings.
+  text = text.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_match, inner) => {
+    const escaped = String(inner).replace(/"/g, "\\\"");
+    return `"${escaped}"`;
+  });
+  // Remove trailing commas before } or ]
+  text = text.replace(/,\s*([}\]])/g, "$1");
+
+  return text;
+}
+
+function extractFirstJsonObject(text) {
+  if (!text || typeof text !== "string") {
+    return "";
+  }
+
+  let startIndex = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (startIndex < 0) {
+      if (char === "{") {
+        startIndex = index;
+        depth = 1;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return "";
 }
 
 function scheduleLlmSmartSearchRefresh(force = false) {
@@ -2416,13 +3052,51 @@ async function requestLlmJson(aiConfig, systemPrompt, userPrompt) {
   }
 
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
+  const content = extractLlmContent(data?.choices?.[0]?.message?.content);
 
   if (!content || typeof content !== "string") {
     throw new Error("LLM returned empty content.");
   }
 
   return parseLlmJson(content);
+}
+
+function extractLlmContent(rawContent) {
+  if (typeof rawContent === "string") {
+    return rawContent;
+  }
+
+  if (Array.isArray(rawContent)) {
+    return rawContent
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+        if (part && typeof part === "object") {
+          if (typeof part.text === "string") {
+            return part.text;
+          }
+          if (typeof part.content === "string") {
+            return part.content;
+          }
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (rawContent && typeof rawContent === "object") {
+    if (typeof rawContent.text === "string") {
+      return rawContent.text;
+    }
+    if (typeof rawContent.content === "string") {
+      return rawContent.content;
+    }
+  }
+
+  return "";
 }
 
 function createEmptySearchEnhancementIndex() {
@@ -2527,16 +3201,88 @@ function getSearchEnhancementStats() {
   };
 }
 
-function scheduleSearchEnhancementProcessing(force = false) {
-  if (searchEnhancementTimer) {
-    clearTimeout(searchEnhancementTimer);
-    searchEnhancementTimer = null;
+function renderSearchEnhancementProgress() {
+  const stats = getSearchEnhancementStats();
+  const percent = stats.totalCount > 0 ? Math.round((stats.processedCount / stats.totalCount) * 100) : 0;
+  let runtimeSuffix = "";
+  if (searchEnhancementRunState?.active) {
+    const batchTarget = Math.max(1, Number(searchEnhancementRunState.target) || 1);
+    const batchProcessed = Math.max(0, Math.min(batchTarget, Number(searchEnhancementRunState.processed) || 0));
+    elements.preprocessProgressBar.max = batchTarget;
+    elements.preprocessProgressBar.value = batchProcessed;
+    const etaSeconds = estimatePreprocessEtaSeconds(searchEnhancementRunState);
+    runtimeSuffix = ` · Batch ${searchEnhancementRunState.processed}/${searchEnhancementRunState.target}`;
+    if (searchEnhancementRunState.processed < 20) {
+      runtimeSuffix += " · ETA warming up";
+    } else if (etaSeconds > 0) {
+      runtimeSuffix += ` · ETA ${formatDuration(etaSeconds)}`;
+    }
+  } else {
+    elements.preprocessProgressBar.max = 100;
+    elements.preprocessProgressBar.value = percent;
   }
+  elements.preprocessProgressText.textContent = `Preprocess progress: ${stats.processedCount}/${stats.totalCount} (${percent}%)${runtimeSuffix}`;
+  elements.preprocessLastFull.textContent = `Last full preprocess: ${
+    searchEnhancementMeta.lastFullProcessedAt ? new Date(searchEnhancementMeta.lastFullProcessedAt).toLocaleString() : "Never"
+  }`;
+}
 
-  const delay = force ? 250 : SEARCH_ENHANCEMENT_COOLDOWN_MS;
-  searchEnhancementTimer = setTimeout(() => {
-    runSearchEnhancementProcessing({ force }).catch(() => {});
-  }, delay);
+function estimatePreprocessEtaSeconds(runState) {
+  const elapsedSeconds = (Date.now() - runState.startedAt) / 1000;
+  if (elapsedSeconds <= 0 || runState.processed <= 0) {
+    return 0;
+  }
+  const speed = runState.processed / elapsedSeconds;
+  if (speed <= 0) {
+    return 0;
+  }
+  const remaining = Math.max(0, runState.target - runState.processed);
+  return Math.round(remaining / speed);
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = seconds % 60;
+  if (minutes <= 0) {
+    return `${remainSeconds}s`;
+  }
+  return `${minutes}m ${remainSeconds}s`;
+}
+
+function createDefaultSearchEnhancementMeta() {
+  return {
+    lastFullProcessedAt: ""
+  };
+}
+
+function normalizeSearchEnhancementMeta(rawMeta) {
+  const next = rawMeta && typeof rawMeta === "object" ? rawMeta : {};
+  const lastFullProcessedAt = String(next.lastFullProcessedAt || "");
+  const parsed = Date.parse(lastFullProcessedAt);
+  return {
+    lastFullProcessedAt: Number.isFinite(parsed) ? new Date(parsed).toISOString() : ""
+  };
+}
+
+async function loadSearchEnhancementMeta() {
+  const result = await chrome.storage.local.get(SEARCH_ENHANCEMENT_META_KEY);
+  searchEnhancementMeta = normalizeSearchEnhancementMeta(result[SEARCH_ENHANCEMENT_META_KEY]);
+}
+
+async function saveSearchEnhancementMeta() {
+  await chrome.storage.local.set({
+    [SEARCH_ENHANCEMENT_META_KEY]: searchEnhancementMeta
+  });
+}
+
+function isRateLimitedOverloadError(error) {
+  const message = String(error?.message || "");
+  return message.includes("HTTP 429") || message.includes("HTTP 529") || message.toLowerCase().includes("overload");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function runSearchEnhancementProcessing(options = {}) {
@@ -2545,22 +3291,14 @@ async function runSearchEnhancementProcessing(options = {}) {
   }
 
   const force = Boolean(options.force);
-  if (!searchConfig.llmPreprocessEnabled && !force) {
-    return;
-  }
-
-  if (!force) {
-    const now = Date.now();
-    if (now - lastSearchInputAt < SEARCH_ENHANCEMENT_IDLE_MS) {
-      scheduleSearchEnhancementProcessing();
-      return;
-    }
-  }
-
   const aiConfig = await getAiConfig();
   if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
+    if (force) {
+      showCloudMessage("Preprocess needs API Key + Base URL + Model.", true);
+    }
     return;
   }
+  const runtime = getSearchEnhancementRuntimeConfig(searchConfig, aiConfig);
 
   const candidates = collectSearchEnhancementCandidates(SEARCH_ENHANCEMENT_BATCH_SIZE);
   if (candidates.length === 0) {
@@ -2572,39 +3310,94 @@ async function runSearchEnhancementProcessing(options = {}) {
   }
 
   searchEnhancementBusy = true;
+  searchEnhancementRunState = {
+    active: true,
+    startedAt: Date.now(),
+    target: candidates.length,
+    processed: 0
+  };
   elements.runPreprocessButton.disabled = true;
   elements.systemActionStatus.classList.add("loading");
+  renderSearchEnhancementProgress();
 
   let successCount = 0;
+  let failedCount = 0;
+  let haltedByRateLimit = false;
+  const startedAt = Date.now();
   try {
-    for (const candidate of candidates) {
-      const parsed = await requestSearchEnhancementForItem(candidate, aiConfig);
-      searchEnhancementIndex.items[candidate.url] = normalizeSearchEnhancementEntry({
-        ...parsed,
-        processedAt: new Date().toISOString(),
-        model: aiConfig.model
-      });
-      successCount += 1;
-    }
+    const batches = chunkArray(candidates, runtime.requestItemLimit);
+    let cursor = 0;
+    let rateLimitStreak = 0;
+
+    const runWorker = async () => {
+      while (true) {
+        if (haltedByRateLimit) {
+          return;
+        }
+
+        const batch = batches[cursor];
+        cursor += 1;
+        if (!batch) {
+          return;
+        }
+
+        const result = await processEnhancementBatchWithRetry(batch, aiConfig, runtime);
+        successCount += result.successCount;
+        failedCount += result.failedCount;
+        searchEnhancementRunState.processed += result.attemptedCount;
+
+        if (result.rateLimited) {
+          rateLimitStreak += 1;
+          await sleep(runtime.rateLimitCooldownMs);
+          if (rateLimitStreak >= runtime.maxRateLimitStreak) {
+            haltedByRateLimit = true;
+          }
+        } else {
+          rateLimitStreak = 0;
+        }
+
+        renderSearchEnhancementProgress();
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(runtime.workerCount, batches.length) }, () => runWorker());
+    await Promise.all(workers);
 
     if (successCount > 0) {
       pruneSearchEnhancementIndex();
       await saveSearchEnhancementIndex();
-      renderCollections();
-      renderSearchResults();
-      const stats = getSearchEnhancementStats();
-      showCloudMessage(`LLM preprocessing indexed ${stats.processedCount}/${stats.totalCount} links.`);
     }
+
+    const stats = getSearchEnhancementStats();
+    if (stats.totalCount > 0 && stats.processedCount >= stats.totalCount) {
+      searchEnhancementMeta.lastFullProcessedAt = new Date().toISOString();
+      await saveSearchEnhancementMeta();
+    }
+
+    renderCollections();
+    renderSearchResults();
+    renderSearchEnhancementProgress();
+
+    const spentSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    if (haltedByRateLimit) {
+      showCloudMessage(
+        `Preprocess paused after repeated provider rate limits: ${successCount} successes, ${failedCount} failed, ${spentSeconds}s.`,
+        true
+      );
+      return;
+    }
+
+    showCloudMessage(
+      `Preprocess batch done (${runtime.modeLabel}): +${successCount} indexed, ${failedCount} failed. Progress ${stats.processedCount}/${stats.totalCount}.`
+    );
   } catch (error) {
     showCloudMessage(`LLM preprocessing failed: ${formatCloudError(error)}`, true);
   } finally {
+    searchEnhancementRunState = null;
     searchEnhancementBusy = false;
     elements.runPreprocessButton.disabled = false;
     elements.systemActionStatus.classList.remove("loading");
-    const remaining = collectSearchEnhancementCandidates(1).length > 0;
-    if (remaining) {
-      scheduleSearchEnhancementProcessing();
-    }
+    renderSearchEnhancementProgress();
   }
 }
 
@@ -2654,36 +3447,340 @@ function pruneSearchEnhancementIndex() {
   searchEnhancementIndex.items = Object.fromEntries(trimmed);
 }
 
-async function requestSearchEnhancementForItem(item, aiConfig) {
+async function processEnhancementBatchWithRetry(items, aiConfig, runtime) {
+  let attempt = 0;
+  let lastError = null;
+
+  while (attempt <= runtime.maxRetries) {
+    try {
+      const parsedByUrl = await requestSearchEnhancementBatch(items, aiConfig, runtime.fastMode);
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const item of items) {
+        const parsed = parsedByUrl.get(item.url);
+        if (!parsed) {
+          failedCount += 1;
+          continue;
+        }
+
+        searchEnhancementIndex.items[item.url] = normalizeSearchEnhancementEntry({
+          ...parsed,
+          processedAt: new Date().toISOString(),
+          model: aiConfig.model
+        });
+        successCount += 1;
+      }
+
+      if (runtime.requestGapMs > 0) {
+        await sleep(runtime.requestGapMs);
+      }
+
+      return {
+        successCount,
+        failedCount,
+        rateLimited: false,
+        attemptedCount: items.length
+      };
+    } catch (error) {
+      lastError = error;
+      if (!isRateLimitedOverloadError(error)) {
+        return processEnhancementItemsIndividually(items, aiConfig, runtime);
+      }
+
+      if (attempt >= runtime.maxRetries) {
+        return {
+          successCount: 0,
+          failedCount: items.length,
+          rateLimited: true,
+          attemptedCount: 0
+        };
+      }
+
+      const backoffMs = SEARCH_ENHANCEMENT_RETRY_BASE_MS * Math.pow(2, attempt);
+      await sleep(backoffMs);
+    }
+
+    attempt += 1;
+  }
+
+  if (lastError && !isRateLimitedOverloadError(lastError)) {
+    throw lastError;
+  }
+
+  return {
+    successCount: 0,
+    failedCount: items.length,
+    rateLimited: true,
+    attemptedCount: 0
+  };
+}
+
+async function processEnhancementItemsIndividually(items, aiConfig, runtime) {
+  let successCount = 0;
+  let failedCount = 0;
+  let rateLimited = false;
+  let attemptedCount = 0;
+
+  for (const item of items) {
+    attemptedCount += 1;
+    try {
+      const parsed = await requestSearchEnhancementForSingle(item, aiConfig, runtime.fastMode);
+      searchEnhancementIndex.items[item.url] = normalizeSearchEnhancementEntry({
+        ...parsed,
+        processedAt: new Date().toISOString(),
+        model: aiConfig.model
+      });
+      successCount += 1;
+    } catch (error) {
+      failedCount += 1;
+      if (isRateLimitedOverloadError(error)) {
+        rateLimited = true;
+        break;
+      }
+    }
+
+    if (runtime.requestGapMs > 0) {
+      await sleep(runtime.requestGapMs);
+    }
+  }
+
+  return {
+    successCount,
+    failedCount,
+    rateLimited,
+    attemptedCount
+  };
+}
+
+async function requestSearchEnhancementForSingle(item, aiConfig, fastMode = false) {
   const host = getHost(item.url || "");
   const path = safeUrlPath(item.url);
-  const systemPrompt =
-    "You normalize browser link metadata for high-quality search. Return strict JSON only.";
+  const promptDef = getSearchEnhancementPromptDefinition(fastMode);
   const userPrompt = [
     "Return JSON with keys:",
-    '{"clean_title":"","summary":"","keywords":[],"entities":[],"intent":"","language":""}',
+    promptDef.singleSchema,
     "Rules:",
-    "1) clean_title: concise canonical title.",
-    "2) summary: one-line concise topic.",
-    "3) keywords/entities: lowercase, compact, no duplicates, max 12 each.",
-    "4) intent: one short category (tutorial, bugfix, pricing, docs, news, discussion, tool, repo, other).",
-    "5) language: dominant language code or name.",
-    "No prose outside JSON.",
+    ...promptDef.singleRules,
     `Title: ${item.title || item.url || ""}`,
     `Host: ${host}`,
     `Path: ${path}`,
     `URL: ${item.url || ""}`
   ].join("\n");
 
-  const parsed = await requestLlmJson(aiConfig, systemPrompt, userPrompt);
+  const parsed = await requestLlmJson(aiConfig, promptDef.systemPrompt, userPrompt);
   return {
     cleanTitle: parsed.clean_title || "",
-    summary: parsed.summary || "",
+    summary: fastMode ? "" : parsed.summary || "",
     keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
-    entities: Array.isArray(parsed.entities) ? parsed.entities : [],
-    intent: parsed.intent || "",
-    language: parsed.language || ""
+    entities: fastMode ? [] : Array.isArray(parsed.entities) ? parsed.entities : [],
+    intent: fastMode ? "" : parsed.intent || "",
+    language: fastMode ? "" : parsed.language || ""
   };
+}
+
+async function requestSearchEnhancementBatch(items, aiConfig, fastMode = false) {
+  const promptDef = getSearchEnhancementPromptDefinition(fastMode);
+  const userPrompt = [
+    "Return JSON with one key only: results",
+    promptDef.batchSchema,
+    "Rules:",
+    ...promptDef.batchRules,
+    "",
+    "Input links:",
+    ...items.map((item, index) => {
+      const host = getHost(item.url || "");
+      const path = safeUrlPath(item.url);
+      const title = String(item.title || item.url || "").replace(/\s+/g, " ").trim();
+      return `${index + 1}. url=${item.url} | title=${title} | host=${host} | path=${path}`;
+    })
+  ].join("\n");
+
+  const parsed = await requestLlmJson(aiConfig, promptDef.systemPrompt, userPrompt);
+  return normalizeBatchEnhancementResults(parsed, items, fastMode);
+}
+
+function normalizeBatchEnhancementResults(raw, items, fastMode = false) {
+  const results = extractBatchResultEntries(raw);
+  const expectedUrls = new Set(items.map((item) => item.url));
+  const byUrl = new Map();
+  const itemByCanonicalUrl = new Map(
+    items
+      .map((item) => [canonicalizeUrl(item.url), item])
+      .filter(([canonical]) => Boolean(canonical))
+  );
+
+  for (const entry of results) {
+    const url = String(entry?.url || "").trim();
+    const directMatch = expectedUrls.has(url);
+    const canonicalUrl = canonicalizeUrl(url);
+    const canonicalMatchItem = canonicalUrl ? itemByCanonicalUrl.get(canonicalUrl) : null;
+    const matchedUrl = directMatch ? url : canonicalMatchItem?.url || "";
+
+    if (!matchedUrl) {
+      continue;
+    }
+
+    byUrl.set(matchedUrl, {
+      cleanTitle: entry.clean_title || "",
+      summary: fastMode ? "" : entry.summary || "",
+      keywords: Array.isArray(entry.keywords) ? entry.keywords : [],
+      entities: fastMode ? [] : Array.isArray(entry.entities) ? entry.entities : [],
+      intent: fastMode ? "" : entry.intent || "",
+      language: fastMode ? "" : entry.language || ""
+    });
+  }
+
+  return byUrl;
+}
+
+function getSearchEnhancementPromptDefinition(fastMode) {
+  const systemPrompt =
+    "You normalize browser link metadata for high-quality search. Return strict JSON only. Output MUST be machine-readable JSON.";
+  if (fastMode) {
+    return {
+      systemPrompt,
+      singleSchema: '{"clean_title":"","keywords":[]}',
+      singleRules: [
+        "1) clean_title concise canonical title.",
+        "2) keywords lowercase compact arrays, no duplicates, up to 10 items.",
+        "3) No extra text."
+      ],
+      batchSchema: '{"results":[{"url":"","clean_title":"","keywords":[]}]}',
+      batchRules: [
+        "1) Return exactly one result object for each provided URL.",
+        "2) Copy URL exactly as input.",
+        "3) clean_title concise canonical title.",
+        "4) keywords lowercase compact arrays, no duplicates, up to 10 items.",
+        "5) No extra text."
+      ]
+    };
+  }
+
+  return {
+    systemPrompt,
+    singleSchema: '{"clean_title":"","summary":"","keywords":[],"entities":[],"intent":"","language":""}',
+    singleRules: [
+      "1) clean_title concise canonical title.",
+      "2) summary one-line concise topic.",
+      "3) keywords/entities lowercase compact arrays, no duplicates.",
+      "4) intent from tutorial, bugfix, pricing, docs, news, discussion, tool, repo, other.",
+      "5) language as short tag/name.",
+      "6) No extra text."
+    ],
+    batchSchema: '{"results":[{"url":"","clean_title":"","summary":"","keywords":[],"entities":[],"intent":"","language":""}]}',
+    batchRules: [
+      "1) Return exactly one result object for each provided URL.",
+      "2) Copy URL exactly as input.",
+      "3) clean_title concise; summary one line; keywords/entities lowercase compact arrays.",
+      "4) intent from: tutorial, bugfix, pricing, docs, news, discussion, tool, repo, other.",
+      "5) language as short tag/name.",
+      "6) No extra text."
+    ]
+  };
+}
+
+function getSearchEnhancementRuntimeConfig(config, aiConfig) {
+  const fastMode = Boolean(config?.preprocessFastMode);
+  const provider = aiConfig?.provider || "openai";
+  if (provider === "minimax" && fastMode) {
+    return {
+      fastMode: true,
+      modeLabel: "fast/minimax-safe",
+      requestItemLimit: SEARCH_ENHANCEMENT_MINIMAX_FAST_REQUEST_ITEM_LIMIT,
+      workerCount: SEARCH_ENHANCEMENT_MINIMAX_FAST_WORKER_COUNT,
+      maxRetries: SEARCH_ENHANCEMENT_MINIMAX_FAST_MAX_RETRIES,
+      requestGapMs: SEARCH_ENHANCEMENT_MINIMAX_FAST_REQUEST_GAP_MS,
+      rateLimitCooldownMs: SEARCH_ENHANCEMENT_RATE_LIMIT_COOLDOWN_MS,
+      maxRateLimitStreak: SEARCH_ENHANCEMENT_MAX_RATE_LIMIT_STREAK
+    };
+  }
+
+  if (fastMode) {
+    return {
+      fastMode: true,
+      modeLabel: "fast",
+      requestItemLimit: SEARCH_ENHANCEMENT_FAST_REQUEST_ITEM_LIMIT,
+      workerCount: SEARCH_ENHANCEMENT_FAST_WORKER_COUNT,
+      maxRetries: SEARCH_ENHANCEMENT_FAST_MAX_RETRIES,
+      requestGapMs: SEARCH_ENHANCEMENT_FAST_REQUEST_GAP_MS,
+      rateLimitCooldownMs: SEARCH_ENHANCEMENT_RATE_LIMIT_COOLDOWN_MS,
+      maxRateLimitStreak: SEARCH_ENHANCEMENT_MAX_RATE_LIMIT_STREAK
+    };
+  }
+  return {
+    fastMode: false,
+    modeLabel: "standard",
+    requestItemLimit: SEARCH_ENHANCEMENT_REQUEST_ITEM_LIMIT,
+    workerCount: SEARCH_ENHANCEMENT_WORKER_COUNT,
+    maxRetries: SEARCH_ENHANCEMENT_MAX_RETRIES,
+    requestGapMs: SEARCH_ENHANCEMENT_REQUEST_GAP_MS,
+    rateLimitCooldownMs: SEARCH_ENHANCEMENT_RATE_LIMIT_COOLDOWN_MS,
+    maxRateLimitStreak: SEARCH_ENHANCEMENT_MAX_RATE_LIMIT_STREAK
+  };
+}
+
+function extractBatchResultEntries(raw) {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+
+  if (Array.isArray(raw.results)) {
+    return raw.results;
+  }
+  if (Array.isArray(raw.items)) {
+    return raw.items;
+  }
+  if (Array.isArray(raw.data)) {
+    return raw.data;
+  }
+
+  const keyEntries = Object.entries(raw)
+    .filter(([key, value]) => /^https?:\/\//i.test(key) && value && typeof value === "object")
+    .map(([key, value]) => ({ url: key, ...value }));
+  if (keyEntries.length > 0) {
+    return keyEntries;
+  }
+
+  if (raw.result && typeof raw.result === "object") {
+    if (Array.isArray(raw.result.results)) {
+      return raw.result.results;
+    }
+    if (Array.isArray(raw.result.items)) {
+      return raw.result.items;
+    }
+    if (Array.isArray(raw.result.data)) {
+      return raw.result.data;
+    }
+  }
+
+  return [];
+}
+
+function canonicalizeUrl(url) {
+  try {
+    const parsed = new URL(String(url || "").trim());
+    parsed.hash = "";
+    // Normalize trailing slash for path except root
+    if (parsed.pathname.length > 1 && parsed.pathname.endsWith("/")) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
+    }
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "";
+  }
+}
+
+function chunkArray(items, chunkSize) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
 }
 
 function safeUrlPath(url) {
@@ -2795,6 +3892,36 @@ async function importDeckBackup(event) {
   });
 }
 
+async function importPrivateInitBundleFromFile(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+
+  if (!file) {
+    return;
+  }
+
+  await runCloudAction(async () => {
+    const user = await getCloudUser();
+    const canUsePrivateInit = await isPrivateInitAllowedUser(user);
+    if (!canUsePrivateInit) {
+      throw new Error("Private init import is not enabled for this account.");
+    }
+
+    const confirmed = window.confirm(
+      "Import private init data now?\nThis will upsert spaces/collections/links into your current Supabase account."
+    );
+    if (!confirmed) {
+      return "Private init import canceled.";
+    }
+
+    const raw = await readTextFromMaybeGzip(file);
+    const bundle = JSON.parse(raw);
+    const result = await importInitBundleToCloud(bundle, { setActiveSpace: true });
+    deck = await syncDeckWithCloud();
+    return `Private init imported: ${result.spaces} spaces, ${result.collections} collections, ${result.links} links.`;
+  });
+}
+
 async function runCloudAction(action) {
   setCloudBusy(true);
   elements.systemActionStatus.classList.add("loading");
@@ -2846,6 +3973,37 @@ function renderCloudDetails() {
   }
 }
 
+async function readTextFromMaybeGzip(file) {
+  const name = String(file?.name || "").toLowerCase();
+  if (!name.endsWith(".gz")) {
+    return file.text();
+  }
+
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("This browser does not support .gz import. Please use a plain .json file.");
+  }
+
+  const stream = file.stream().pipeThrough(new DecompressionStream("gzip"));
+  const response = new Response(stream);
+  return response.text();
+}
+
+async function isPrivateInitAllowedUser(user) {
+  if (!user?.id) {
+    return false;
+  }
+
+  const digest = await sha256Hex(`${String(user.id).trim()}|${PRIVATE_INIT_OWNER_SALT}`);
+  return PRIVATE_INIT_ALLOWED_USER_HASHES.has(digest);
+}
+
+async function sha256Hex(text) {
+  const encoded = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", encoded);
+  const bytes = Array.from(new Uint8Array(hash));
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function renderAutoSaveControls() {
   const [config, meta] = await Promise.all([getAutoSaveConfig(), getAutoSaveMeta()]);
 
@@ -2875,15 +4033,16 @@ async function renderSearchControls() {
   searchConfig = await getSearchConfig();
   elements.smartSearchRelaxToggle.checked = searchConfig.autoRelaxSmartFilters;
   elements.llmStrictModeToggle.checked = searchConfig.llmStrictMode;
-  elements.llmPreprocessToggle.checked = searchConfig.llmPreprocessEnabled;
+  elements.preprocessFastModeToggle.checked = searchConfig.preprocessFastMode;
   elements.runPreprocessButton.disabled = searchEnhancementBusy;
+  renderSearchEnhancementProgress();
 }
 
 async function saveSearchControls() {
   const config = normalizeSearchConfig({
     autoRelaxSmartFilters: elements.smartSearchRelaxToggle.checked,
     llmStrictMode: elements.llmStrictModeToggle.checked,
-    llmPreprocessEnabled: elements.llmPreprocessToggle.checked
+    preprocessFastMode: elements.preprocessFastModeToggle.checked
   });
 
   await chrome.storage.local.set({
@@ -2896,11 +4055,10 @@ async function saveSearchControls() {
   renderSearchResults();
   renderSmartSearchChips();
   scheduleLlmSmartSearchRefresh(true);
-  scheduleSearchEnhancementProcessing(true);
   showCloudMessage(
     `Smart search updated: auto-relax ${config.autoRelaxSmartFilters ? "on" : "off"}, strict LLM mode ${
       config.llmStrictMode ? "on" : "off"
-    }, preprocess ${config.llmPreprocessEnabled ? "on" : "off"}.`
+    }, preprocess mode ${config.preprocessFastMode ? "fast" : "standard"}.`
   );
 }
 
@@ -2939,7 +4097,7 @@ function normalizeSearchConfig(rawConfig) {
   return {
     autoRelaxSmartFilters: typeof next.autoRelaxSmartFilters === "boolean" ? next.autoRelaxSmartFilters : true,
     llmStrictMode: typeof next.llmStrictMode === "boolean" ? next.llmStrictMode : false,
-    llmPreprocessEnabled: typeof next.llmPreprocessEnabled === "boolean" ? next.llmPreprocessEnabled : true
+    preprocessFastMode: typeof next.preprocessFastMode === "boolean" ? next.preprocessFastMode : true
   };
 }
 

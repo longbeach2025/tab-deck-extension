@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.26`
+- 开发版：`v0.2.0-alpha.27`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.26` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.26/tab-deck-extension-v0.2.0-alpha.26.zip)
+- [`v0.2.0-alpha.27` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.27/tab-deck-extension-v0.2.0-alpha.27.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.26`）
+## 核心功能（截至 `v0.2.0-alpha.27`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -43,8 +43,10 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 - LLM 搜索增强（可选）：
   - 侧栏 `LLM Search` 可配置 `Provider / API Base URL / API Key / Model`。
   - 支持严格模式开关：`Require LLM for NL enhancement`（开启后无 LLM 不做 NL 增强）。
+  - 支持极速预处理开关：`Fast preprocess mode`（仅生成 `clean_title + keywords`，换取更高吞吐）。
   - 自然语言查询会调用 LLM 做结构化解析（关键词、域名、时间范围），并与本地检索融合。
-  - 支持后台预处理索引：`Enable background LLM preprocessing` + `Run preprocess now`。
+  - 支持手动预处理索引：`Run preprocess batch (200)`（每次最多处理 200 条）。
+  - 支持预处理进度可视化：进度百分比 + `Last full preprocess` 精确时间。
   - 解析结果会展示为可编辑 chips，支持一键删除条件并即时重算。
 - 左侧布局优化：
   - 新增统一 `Status Center` 展示动作反馈、同步状态和错误信息。
@@ -104,7 +106,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.26`。
+2. 安装 `v0.2.0-alpha.27`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -345,6 +347,18 @@ alter table public.tab_deck_links
   - `Require LLM for NL enhancement` 开启后，若 LLM 不可用则暂停 NL 增强，不再回退到本地 NL 解析。
   - 基础关键词搜索仍可用，避免完全不可搜索。
 
+### `v0.2.0-alpha.27` (Manual Preprocess Control)
+
+- 预处理策略改为纯手动：
+  - 配置 LLM key 后不再自动触发全量预处理。
+  - 仅在用户点击 `Run preprocess batch (200)` 时执行。
+- 预处理执行改为分批渐进：
+  - 单次最多处理 200 条链接，降低高峰限流风险。
+  - 发生 429/529 过载时会暂停本批次并保留已完成进度。
+- 新增可视化进度信息：
+  - 展示当前完整跑一次的进度百分比（`processed/total`）。
+  - 展示最近一次完整跑完时间（`Last full preprocess`）。
+
 ## 构建与打包
 
 ```bash
@@ -353,6 +367,148 @@ npm install
 ```
 
 输出目录：`dist/`
+
+## Toby 3xxx 历史数据离线预处理（DeepSeek）+ 批量导入 Supabase
+
+适用场景：你已经有大量 Toby 导出历史（例如 3000+），希望先离线做结构化预处理，再一次性导入云端，避免在扩展内逐条串行跑导致耗时过长。
+
+### 1. 准备 Toby 导出 JSON
+
+- 在 Toby 导出 `JSON` 文件，记下本地路径（示例：`/Users/you/Downloads/toby-export.json`）。
+
+### 2. 离线预处理（并发 + 可续跑）
+
+```bash
+cd /Users/reclina/tab-deck-extension
+DEEPSEEK_API_KEY="<your_deepseek_api_key>" \
+npm run preprocess:toby:deepseek -- \
+  --input /Users/you/Downloads/toby-export.json \
+  --output /Users/you/Downloads/toby-preprocessed.json \
+  --space-name "Toby Imported (Preprocessed)" \
+  --concurrency 5 \
+  --checkpoint-size 50
+```
+
+脚本特性：
+
+- 并发处理（默认 5），不是逐条串行。
+- 失败自动重试（429/5xx/529）。
+- 断点续跑：默认读取已有输出并跳过已完成记录（可用 `--no-resume` 关闭）。
+- 当前版本务实策略：不抓正文，仅基于 `title + url + domain + meta description` 做结构化抽取。
+
+输出文件会包含可直接导入 Supabase 的 `rows.spaces / rows.collections / rows.links`，以及每条链接的 `metadata.preprocess` 结果。
+
+### 3. 导入 Supabase（批量 upsert）
+
+需要准备：
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`（仅用于离线导入脚本，不要写进仓库）
+- 目标用户 `user_id`（Supabase Auth UUID）
+
+```bash
+cd /Users/reclina/tab-deck-extension
+SUPABASE_URL="https://<project>.supabase.co" \
+SUPABASE_SERVICE_ROLE_KEY="<service_role_key>" \
+npm run import:preprocessed:supabase -- \
+  --input /Users/you/Downloads/toby-preprocessed.json \
+  --user-id <auth_user_uuid> \
+  --batch-size 200
+```
+
+可选参数：
+
+- `--dry-run`：只做输入校验与条数统计，不写库。
+- `--no-set-active-space`：导入后不覆盖 `active_space_id`。
+
+### 4. 生成 embedding（离线批量，本地 0 成本推荐）
+
+可在结构化预处理完成后，对本地中间文件继续做向量化，结果仍写回 JSON 中每条 link 的 `metadata.preprocess.embedding*` 字段。
+
+```bash
+cd /Users/reclina/tab-deck-extension
+npm run embed:preprocessed:local -- \
+  --input /Users/you/Downloads/toby-preprocessed.json \
+  --output /Users/you/Downloads/toby-preprocessed-embedded.json \
+  --model BAAI/bge-m3 \
+  --batch-size 32 \
+  --checkpoint-size 200 \
+  --normalize
+```
+
+说明：
+
+- 第一次运行需要安装依赖：
+  - `pip3 install sentence-transformers`
+- 首次加载模型会自动下载 `BAAI/bge-m3`（下载后可离线复用）。
+- 默认增量模式：`embeddingStatus=ready` 且输入 hash 未变化时会跳过；可加 `--force` 全量重跑。
+- 如果你更偏好云端 embeddings，可继续使用 `npm run embed:preprocessed`（OpenAI 兼容接口）。
+
+推荐顺序：先完成本步骤，再把 `toby-preprocessed-embedded.json` 用第 3 步导入脚本入云。  
+如果你已经导入过无 embedding 版本，直接再次导入 `...-embedded.json`（upsert 覆盖 metadata）即可。
+
+### 5. 导入后验证建议
+
+- 在 Supabase SQL Editor 检查：
+  - `tab_deck_spaces` 行数
+  - `tab_deck_collections` 行数
+  - `tab_deck_links` 行数
+- 在扩展里用同账号登录后点击同步，确认导入空间与链接可见。
+
+## `.27` 初始化数据包（3320 links + embedding）
+
+目标：后续环境初始化直接导入“已清理+已向量化”的成品数据，不再重复从 Toby 原始 JSON 开始跑。
+
+安全规则（长期）：
+
+- Public 仓库/Release 只发布代码与脚本。
+- 私有初始化数据包只保留在本地或私有存储，不进入 Git 历史。
+- 仓库已默认忽略 `supabase/init/`。
+
+### 1. 从当前 Supabase 导出初始化包
+
+```bash
+cd /Users/reclina/tab-deck-extension
+SUPABASE_URL="https://<project>.supabase.co" \
+SUPABASE_SERVICE_ROLE_KEY="<service_role_key>" \
+npm run export:init:supabase -- \
+  --user-id <auth_user_uuid> \
+  --output-dir supabase/init/alpha27
+```
+
+导出产物：
+
+- `supabase/init/alpha27/tab-deck-alpha27-init-bundle.json`
+- `supabase/init/alpha27/tab-deck-alpha27-init-bundle.json.gz`
+- `supabase/init/alpha27/manifest.json`
+
+默认只导出 `deleted_at IS NULL` 的有效数据，并自动裁剪到“被导出 links 实际引用到的 spaces/collections”（避免历史残留结构一并带出）。
+
+### 2. 导入初始化包到目标环境
+
+```bash
+cd /Users/reclina/tab-deck-extension
+SUPABASE_URL="https://<project>.supabase.co" \
+SUPABASE_SERVICE_ROLE_KEY="<service_role_key>" \
+npm run import:init:supabase -- \
+  --input supabase/init/alpha27/tab-deck-alpha27-init-bundle.json.gz \
+  --user-id <auth_user_uuid> \
+  --batch-size 200
+```
+
+说明：
+
+- 支持 `.json` 和 `.json.gz` 输入。
+- 导入是 `upsert`，可重复执行用于幂等修复。
+- 默认会同步更新 `tab_deck_user_settings.active_space_id`（可用 `--no-set-active-space` 关闭）。
+
+## 扩展内“私有初始化数据”入口（本地文件）
+
+`v0.2.0-alpha.27` 开始支持：登录后若账号命中本地私有授权规则，会显示 `Import private init data` 按钮。
+
+- 只支持本地文件导入（`.json` / `.json.gz`）。
+- 文件内容通过当前登录 Supabase 账号直接 `upsert` 入云。
+- 不依赖 Toby 原始导出文件，不会把初始化数据打包进公开 Release。
 
 ## 后续优化计划（Roadmap）
 

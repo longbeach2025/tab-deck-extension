@@ -338,6 +338,101 @@ export async function syncPendingCloudDeck() {
   return true;
 }
 
+export async function fetchCloudLinkEmbeddings(linkIds = []) {
+  const supabase = await getRequiredClient();
+  const user = await getRequiredUser();
+  const uniqueIds = Array.from(new Set((Array.isArray(linkIds) ? linkIds : []).map((id) => String(id || "").trim()))).filter(
+    Boolean
+  );
+
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = [];
+  const pageSize = 200;
+  for (let offset = 0; offset < uniqueIds.length; offset += pageSize) {
+    const slice = uniqueIds.slice(offset, offset + pageSize);
+    const { data, error } = await supabase
+      .from(TABLES.links)
+      .select("id,metadata")
+      .eq("user_id", user.id)
+      .is("deleted_at", null)
+      .in("id", slice);
+
+    if (error) {
+      throw error;
+    }
+
+    rows.push(...(Array.isArray(data) ? data : []));
+  }
+
+  const embeddingsById = new Map();
+  for (const row of rows) {
+    const embedding = row?.metadata?.preprocess?.embedding;
+    if (Array.isArray(embedding) && embedding.length > 0) {
+      embeddingsById.set(row.id, embedding);
+    }
+  }
+
+  return embeddingsById;
+}
+
+export async function importInitBundleToCloud(bundle, options = {}) {
+  const supabase = await getRequiredClient();
+  const user = await getRequiredUser();
+  const parsed = validateInitBundle(bundle);
+  const now = new Date().toISOString();
+  const activeSpaceId = parsed.meta?.activeSpaceId || parsed.rows.spaces[0]?.id || null;
+  const setActiveSpace = options.setActiveSpace !== false;
+
+  const spaces = withUserId(parsed.rows.spaces, user.id);
+  const collections = withUserId(parsed.rows.collections, user.id);
+  const links = withUserId(parsed.rows.links, user.id);
+
+  if (spaces.length > 0) {
+    await upsertRowsInChunks(supabase, TABLES.spaces, spaces, 200);
+  }
+
+  if (collections.length > 0) {
+    await upsertRowsInChunks(supabase, TABLES.collections, collections, 200);
+  }
+
+  if (links.length > 0) {
+    await upsertRowsInChunks(supabase, TABLES.links, links, 100);
+  }
+
+  if (setActiveSpace) {
+    const { data: existingSettings, error: settingsError } = await supabase
+      .from(TABLES.settings)
+      .select("*")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (settingsError) {
+      throw settingsError;
+    }
+
+    const settingsPayload = {
+      user_id: user.id,
+      active_space_id: activeSpaceId,
+      theme: existingSettings?.theme || "system",
+      recently_deleted: Array.isArray(existingSettings?.recently_deleted) ? existingSettings.recently_deleted : [],
+      tombstones: Array.isArray(existingSettings?.tombstones) ? existingSettings.tombstones : [],
+      updated_at: now
+    };
+
+    await throwIfSupabaseError(supabase.from(TABLES.settings).upsert(settingsPayload, { onConflict: "user_id" }));
+  }
+
+  return {
+    spaces: spaces.length,
+    collections: collections.length,
+    links: links.length,
+    activeSpaceId
+  };
+}
+
 export async function clearPendingCloudDeck() {
   await chrome.storage.local.remove(CLOUD_PENDING_DECK_KEY);
 }
@@ -539,5 +634,38 @@ async function markDeletedForTable(supabase, table, userId, remoteRows, localRow
 
   if (error) {
     throw error;
+  }
+}
+
+function validateInitBundle(bundle) {
+  if (!bundle || typeof bundle !== "object") {
+    throw new Error("Invalid init bundle: expected JSON object.");
+  }
+  if (!bundle.rows || typeof bundle.rows !== "object") {
+    throw new Error("Invalid init bundle: missing rows.");
+  }
+  if (!Array.isArray(bundle.rows.spaces) || !Array.isArray(bundle.rows.collections) || !Array.isArray(bundle.rows.links)) {
+    throw new Error("Invalid init bundle: rows.spaces/collections/links must be arrays.");
+  }
+  if (bundle.rows.spaces.length === 0) {
+    throw new Error("Invalid init bundle: at least one space is required.");
+  }
+  return bundle;
+}
+
+function withUserId(rows, userId) {
+  return rows.map((row) => ({
+    ...row,
+    user_id: userId
+  }));
+}
+
+async function upsertRowsInChunks(supabase, table, rows, chunkSize) {
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    const chunk = rows.slice(index, index + chunkSize);
+    const { error } = await supabase.from(table).upsert(chunk, { onConflict: "id" });
+    if (error) {
+      throw error;
+    }
   }
 }

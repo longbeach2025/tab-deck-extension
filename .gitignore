@@ -2,3 +2,5 @@
 node_modules/
 dist/
 *.zip
+scripts/__pycache__/
+supabase/init/

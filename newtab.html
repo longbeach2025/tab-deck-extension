@@ -13,7 +13,7 @@
         <div>
           <div class="brand-title-row">
             <h1>Tab Deck</h1>
-            <span id="versionLabel" class="version-label">v0.2.0-alpha.26</span>
+            <span id="versionLabel" class="version-label">v0.2.0-alpha.27</span>
           </div>
           <p id="deckStats">Loading</p>
         </div>
@@ -87,6 +87,11 @@
           <button id="importDeckButton" class="secondary-button">Import JSON / Toby</button>
         </div>
         <input id="importDeckInput" type="file" accept="application/json,.json,.JSON" hidden>
+        <div id="privateInitSection" class="cloud-fields hidden">
+          <p class="cloud-meta">Private init data (local file only, not bundled in public releases).</p>
+          <button id="importPrivateInitButton" class="secondary-button">Import private init data</button>
+          <input id="importPrivateInitInput" type="file" accept="application/json,.json,.json.gz,.JSON,.GZ" hidden>
+        </div>
       </div>
 
       <div class="side-section">
@@ -99,8 +104,8 @@
             <span>Require LLM for NL enhancement</span>
           </label>
           <label class="check-row">
-            <input id="llmPreprocessToggle" type="checkbox">
-            <span>Enable background LLM preprocessing</span>
+            <input id="preprocessFastModeToggle" type="checkbox">
+            <span>Fast preprocess mode (title + keywords only)</span>
           </label>
           <select id="aiProviderSelect" aria-label="AI provider">
             <option value="openai">Provider: OpenAI</option>
@@ -110,7 +115,12 @@
           <input id="aiBaseUrlInput" type="url" placeholder="LLM API Base URL (e.g. https://api.openai.com/v1)">
           <input id="aiApiKeyInput" type="password" placeholder="LLM API Key">
           <input id="aiModelInput" type="text" placeholder="Model (e.g. gpt-4.1-mini)">
-          <button id="runPreprocessButton" class="secondary-button">Run preprocess now</button>
+          <button id="runPreprocessButton" class="secondary-button">Run preprocess batch (200)</button>
+          <div class="preprocess-progress-wrap">
+            <progress id="preprocessProgressBar" max="100" value="0"></progress>
+            <p id="preprocessProgressText" class="cloud-meta">Preprocess progress: 0/0 (0%)</p>
+            <p id="preprocessLastFull" class="cloud-meta">Last full preprocess: Never</p>
+          </div>
           <button id="saveAiConfigButton" class="secondary-button">Save LLM config</button>
         </div>
       </div>
