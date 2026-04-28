@@ -29,6 +29,10 @@ const DEFAULT_STATUS = {
   lastError: ""
 };
 let lastStorageStatus = { ...DEFAULT_STATUS };
+const SYNC_TRUST_LEVEL = {
+  trusted: "trusted",
+  untrusted: "untrusted"
+};
 
 export function makeId(prefix = "id") {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -490,11 +494,16 @@ function applyTombstones(spaces, tombstones) {
   });
 }
 
-export async function loadDeck() {
-  const cloudDeck = await loadCloudDeck();
+export async function loadDeck(options = {}) {
+  const skipCloudAttempt = options?.skipCloudAttempt === true;
+  let fallbackTrustLevel = normalizeTrustLevel(options?.fallbackTrustLevel || SYNC_TRUST_LEVEL.trusted);
 
-  if (cloudDeck) {
-    return cloudDeck;
+  if (!skipCloudAttempt) {
+    const cloudResult = await loadCloudDeck();
+    if (cloudResult.deck) {
+      return cloudResult.deck;
+    }
+    fallbackTrustLevel = cloudResult.trustLevel;
   }
 
   const [localDeck, syncDeck] = await Promise.all([readLocalDeck(), readSyncDeck()]);
@@ -505,7 +514,7 @@ export async function loadDeck() {
     const deck = syncUpdatedAt >= localUpdatedAt ? syncDeck : localDeck;
 
     if (localUpdatedAt > syncUpdatedAt) {
-      await saveDeck(deck);
+      await saveDeck(deck, { syncContext: { trustLevel: fallbackTrustLevel, source: "loadDeck-local-vs-sync" } });
     } else {
       await writeLocalDeck(deck);
       setSyncStatus("Chrome sync is active.");
@@ -521,20 +530,22 @@ export async function loadDeck() {
   }
 
   if (localDeck) {
-    await saveDeck(localDeck);
+    await saveDeck(localDeck, { syncContext: { trustLevel: fallbackTrustLevel, source: "loadDeck-local-fallback" } });
     return normalizeDeck(localDeck);
   }
 
   const deck = defaultDeck();
-  await saveDeck(deck);
+  await saveDeck(deck, { syncContext: { trustLevel: fallbackTrustLevel, source: "loadDeck-default-fallback" } });
   return deck;
 }
 
-export async function saveDeck(deck) {
+export async function saveDeck(deck, options = {}) {
   const normalized = normalizeDeck({
     ...deck,
     updatedAt: nowIso()
   });
+  const syncContext = options?.syncContext && typeof options.syncContext === "object" ? options.syncContext : {};
+  const trustLevel = normalizeTrustLevel(syncContext.trustLevel || SYNC_TRUST_LEVEL.trusted);
 
   await writeLocalDeck(normalized);
 
@@ -552,7 +563,7 @@ export async function saveDeck(deck) {
         return lastStorageStatus;
       }
 
-      await pushDeckToCloud(normalized);
+      await pushDeckToCloud(normalized, { ...syncContext, trustLevel });
       lastStorageStatus = {
         ...lastStorageStatus,
         mode: "cloud",
@@ -713,13 +724,16 @@ export function isDeckStorageChange(areaName, changes) {
 }
 
 export async function syncDeckWithCloud() {
-  const cloudDeck = await loadCloudDeck();
-  return cloudDeck || loadDeck();
+  const cloudResult = await loadCloudDeck();
+  return cloudResult.deck || loadDeck({ skipCloudAttempt: true, fallbackTrustLevel: cloudResult.trustLevel });
 }
 
 async function loadCloudDeck() {
   if (!(await isCloudConfigured())) {
-    return null;
+    return {
+      deck: null,
+      trustLevel: SYNC_TRUST_LEVEL.trusted
+    };
   }
 
   if (!(await isCloudReady())) {
@@ -729,7 +743,10 @@ async function loadCloudDeck() {
       synced: false,
       message: "Supabase configured; sign in to sync."
     };
-    return null;
+    return {
+      deck: null,
+      trustLevel: SYNC_TRUST_LEVEL.trusted
+    };
   }
 
   try {
@@ -743,40 +760,58 @@ async function loadCloudDeck() {
         await writeLocalDeck(remoteDeck);
         await clearPendingCloudDeck();
         setCloudStatus("Supabase cloud sync is active.");
-        return normalizeDeck(remoteDeck);
+        return {
+          deck: normalizeDeck(remoteDeck),
+          trustLevel: SYNC_TRUST_LEVEL.trusted
+        };
       }
 
       if (!localIsStarter && remoteIsStarter) {
-        await pushDeckToCloud(localDeck);
+        await pushDeckToCloud(localDeck, { trustLevel: SYNC_TRUST_LEVEL.trusted, source: "loadCloudDeck-remote-starter" });
         setCloudStatus("Supabase cloud sync is active.");
-        return normalizeDeck(localDeck);
+        return {
+          deck: normalizeDeck(localDeck),
+          trustLevel: SYNC_TRUST_LEVEL.trusted
+        };
       }
 
       const mergedDeck = mergeDecks(localDeck, remoteDeck);
       await writeLocalDeck(mergedDeck);
-      await pushDeckToCloud(mergedDeck);
+      await pushDeckToCloud(mergedDeck, { trustLevel: SYNC_TRUST_LEVEL.trusted, source: "loadCloudDeck-merged" });
       await clearPendingCloudDeck();
       setCloudStatus("Supabase cloud sync is active. Merged local and cloud changes.");
-      return mergedDeck;
+      return {
+        deck: mergedDeck,
+        trustLevel: SYNC_TRUST_LEVEL.trusted
+      };
     }
 
     if (remoteDeck) {
       await writeLocalDeck(remoteDeck);
       setCloudStatus("Supabase cloud sync is active.");
-      return normalizeDeck(remoteDeck);
+      return {
+        deck: normalizeDeck(remoteDeck),
+        trustLevel: SYNC_TRUST_LEVEL.trusted
+      };
     }
 
     if (localDeck) {
-      await pushDeckToCloud(localDeck);
+      await pushDeckToCloud(localDeck, { trustLevel: SYNC_TRUST_LEVEL.trusted, source: "loadCloudDeck-local-only" });
       setCloudStatus("Migrated local deck to Supabase.");
-      return normalizeDeck(localDeck);
+      return {
+        deck: normalizeDeck(localDeck),
+        trustLevel: SYNC_TRUST_LEVEL.trusted
+      };
     }
 
     const deck = defaultDeck();
     await writeLocalDeck(deck);
-    await pushDeckToCloud(deck);
+    await pushDeckToCloud(deck, { trustLevel: SYNC_TRUST_LEVEL.trusted, source: "loadCloudDeck-default" });
     setCloudStatus("Supabase cloud sync is active.");
-    return normalizeDeck(deck);
+    return {
+      deck: normalizeDeck(deck),
+      trustLevel: SYNC_TRUST_LEVEL.trusted
+    };
   } catch (error) {
     const reason = formatCloudError(error);
     lastStorageStatus = {
@@ -787,8 +822,15 @@ async function loadCloudDeck() {
       lastError: reason
     };
     console.warn("[Tab Deck] Cloud sync unavailable.", error);
-    return null;
+    return {
+      deck: null,
+      trustLevel: SYNC_TRUST_LEVEL.untrusted
+    };
   }
+}
+
+function normalizeTrustLevel(value) {
+  return value === SYNC_TRUST_LEVEL.untrusted ? SYNC_TRUST_LEVEL.untrusted : SYNC_TRUST_LEVEL.trusted;
 }
 
 function setCloudStatus(message) {

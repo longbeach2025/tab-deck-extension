@@ -9,6 +9,14 @@ const TABLES = {
   links: "tab_deck_links"
 };
 const CLOUD_PAGE_SIZE = 1000;
+// Temporary safety lock: set true to block cloud writes during emergency maintenance.
+const SYNC_LOCKED = true;
+const SYNC_TRUST_LEVEL = {
+  trusted: "trusted",
+  untrusted: "untrusted"
+};
+const BULK_DELETE_LINKS_ABS_THRESHOLD = 5;
+const BULK_DELETE_LINKS_RATIO_THRESHOLD = 0.01;
 
 let client;
 let clientSignature = "";
@@ -290,13 +298,23 @@ export async function fetchCloudDeck() {
   };
 }
 
-export async function pushDeckToCloud(deck) {
+export async function pushDeckToCloud(deck, syncContext = {}) {
+  if (SYNC_LOCKED) {
+    console.warn("[sync-lock] pushDeckToCloud skipped because SYNC_LOCKED=true");
+    return;
+  }
+
+  const trustLevel = normalizeTrustLevel(syncContext?.trustLevel);
+  console.log("[sync-context] pushDeckToCloud", { trustLevel, source: syncContext?.source || "unknown" });
   const supabase = await getRequiredClient();
   const user = await getRequiredUser();
   const now = new Date().toISOString();
   const payload = flattenDeck(deck, user.id, now);
 
-  await markDeletedRows(supabase, user.id, payload, now);
+  await markDeletedRows(supabase, user.id, payload, now, {
+    trustLevel,
+    source: syncContext?.source || "unknown"
+  });
 
   await throwIfSupabaseError(
     supabase.from(TABLES.settings).upsert(payload.settings, { onConflict: "user_id" })
@@ -315,9 +333,7 @@ export async function pushDeckToCloud(deck) {
   }
 
   if (payload.links.length > 0) {
-    await throwIfSupabaseError(
-      supabase.from(TABLES.links).upsert(payload.links, { onConflict: "id" })
-    );
+    await safeUpsertLinks(supabase, user.id, payload.links);
   }
 
   await clearPendingCloudDeck();
@@ -334,7 +350,10 @@ export async function syncPendingCloudDeck() {
     return false;
   }
 
-  await pushDeckToCloud(result[CLOUD_PENDING_DECK_KEY]);
+  await pushDeckToCloud(result[CLOUD_PENDING_DECK_KEY], {
+    trustLevel: SYNC_TRUST_LEVEL.untrusted,
+    source: "syncPendingCloudDeck"
+  });
   return true;
 }
 
@@ -575,7 +594,15 @@ function flattenDeck(deck, userId, timestamp) {
   return { settings, spaces, collections, links };
 }
 
-async function markDeletedRows(supabase, userId, payload, timestamp) {
+async function markDeletedRows(supabase, userId, payload, timestamp, syncContext = {}) {
+  const trustLevel = normalizeTrustLevel(syncContext?.trustLevel);
+  const source = syncContext?.source || "unknown";
+
+  if (trustLevel !== SYNC_TRUST_LEVEL.trusted) {
+    console.error(`[sync-safety] Skipping markDeletedRows: trustLevel=${trustLevel} source=${source}`);
+    return;
+  }
+
   const [remoteSpaces, remoteCollections, remoteLinks] = await Promise.all([
     fetchAllRows(() => supabase.from(TABLES.spaces).select("id").eq("user_id", userId).is("deleted_at", null).order("id")),
     fetchAllRows(() =>
@@ -583,6 +610,34 @@ async function markDeletedRows(supabase, userId, payload, timestamp) {
     ),
     fetchAllRows(() => supabase.from(TABLES.links).select("id").eq("user_id", userId).is("deleted_at", null).order("id"))
   ]);
+  const cloudActiveLinks = remoteLinks.length;
+  const localActiveLinks = Array.isArray(payload?.links) ? payload.links.length : 0;
+  const diff = cloudActiveLinks - localActiveLinks;
+  const ratio = cloudActiveLinks > 0 ? diff / cloudActiveLinks : 0;
+
+  if (diff > BULK_DELETE_LINKS_ABS_THRESHOLD && ratio > BULK_DELETE_LINKS_RATIO_THRESHOLD) {
+    const cloudIds = new Set(remoteLinks.map((row) => row.id));
+    const localIds = new Set((Array.isArray(payload?.links) ? payload.links : []).map((row) => row.id));
+    const wouldDelete = [];
+    for (const id of cloudIds) {
+      if (!localIds.has(id)) {
+        wouldDelete.push(id);
+        if (wouldDelete.length >= 10) {
+          break;
+        }
+      }
+    }
+
+    console.error(
+      `[sync-safety] Suspicious bulk delete blocked: cloud=${cloudActiveLinks} local=${localActiveLinks} diff=${diff} ratio=${ratio.toFixed(
+        4
+      )} source=${source}`
+    );
+    if (wouldDelete.length > 0) {
+      console.error(`[sync-safety] sample wouldDelete ids: ${wouldDelete.join(", ")}`);
+    }
+    return;
+  }
 
   const deletes = [
     markDeletedForTable(supabase, TABLES.links, userId, remoteLinks, payload.links, timestamp),
@@ -637,6 +692,67 @@ async function markDeletedForTable(supabase, table, userId, remoteRows, localRow
   }
 }
 
+async function safeUpsertLinks(supabase, userId, linkRows) {
+  if (!Array.isArray(linkRows) || linkRows.length === 0) {
+    return;
+  }
+
+  const existingById = await fetchExistingLinkMetadataByIds(supabase, userId, linkRows.map((row) => row.id));
+  const mergedRows = linkRows.map((row) => {
+    const existing = existingById.get(row.id);
+    const existingMetadata = existing?.metadata && typeof existing.metadata === "object" ? existing.metadata : {};
+    const localMetadata = row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
+    const existingPreprocess = existingMetadata?.preprocess;
+    const localPreprocess = localMetadata?.preprocess;
+
+    if (existingPreprocess && !localPreprocess) {
+      console.warn(`[sync-protection] preserving cloud preprocess for link ${row.id}`);
+    }
+
+    const metadata = {
+      ...existingMetadata,
+      ...localMetadata
+    };
+    if (existingPreprocess && !localPreprocess) {
+      metadata.preprocess = existingPreprocess;
+    }
+
+    return {
+      ...row,
+      metadata
+    };
+  });
+
+  await upsertRowsInChunks(supabase, TABLES.links, mergedRows, 200);
+}
+
+async function fetchExistingLinkMetadataByIds(supabase, userId, linkIds) {
+  const byId = new Map();
+  const ids = Array.from(new Set((Array.isArray(linkIds) ? linkIds : []).map((id) => String(id || "").trim()))).filter(Boolean);
+  const pageSize = 200;
+
+  for (let offset = 0; offset < ids.length; offset += pageSize) {
+    const slice = ids.slice(offset, offset + pageSize);
+    const { data, error } = await supabase
+      .from(TABLES.links)
+      .select("id,metadata")
+      .eq("user_id", userId)
+      .in("id", slice);
+
+    if (error) {
+      throw error;
+    }
+
+    for (const row of Array.isArray(data) ? data : []) {
+      if (row?.id) {
+        byId.set(row.id, row);
+      }
+    }
+  }
+
+  return byId;
+}
+
 function validateInitBundle(bundle) {
   if (!bundle || typeof bundle !== "object") {
     throw new Error("Invalid init bundle: expected JSON object.");
@@ -668,4 +784,8 @@ async function upsertRowsInChunks(supabase, table, rows, chunkSize) {
       throw error;
     }
   }
+}
+
+function normalizeTrustLevel(value) {
+  return value === SYNC_TRUST_LEVEL.untrusted ? SYNC_TRUST_LEVEL.untrusted : SYNC_TRUST_LEVEL.trusted;
 }
