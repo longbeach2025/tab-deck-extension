@@ -7,6 +7,25 @@
     <link rel="stylesheet" href="src/styles.css">
   </head>
   <body class="app-shell">
+    <div id="machineBindingGate" class="machine-binding-gate hidden" role="dialog" aria-modal="true" aria-labelledby="machineBindingTitle">
+      <div class="machine-binding-panel">
+        <p class="eyebrow">Development profile binding</p>
+        <h2 id="machineBindingTitle">Bind this Chrome profile</h2>
+        <p id="machineBindingMessage" class="machine-binding-copy">
+          Choose the machine for this development Chrome profile. The binding is permanent for this profile.
+        </p>
+        <div class="machine-choice-row">
+          <button class="secondary-button" data-machine-choice="reclina">reclina</button>
+          <button class="secondary-button" data-machine-choice="chenshuo">chenshuo</button>
+        </div>
+        <label class="field-label" for="machineProfilePathInput">Chrome profile path or profile name</label>
+        <input id="machineProfilePathInput" type="text" placeholder="Example: Profile Dev / /Users/.../Chrome Dev">
+        <div id="machineConfirmBlock" class="machine-confirm-block hidden">
+          <p id="machineConfirmText" class="cloud-meta warning"></p>
+          <button id="confirmMachineBindingButton" class="primary-button">Confirm binding</button>
+        </div>
+      </div>
+    </div>
     <aside class="sidebar">
       <div class="brand-row">
         <div class="brand-mark" aria-hidden="true">TD</div>

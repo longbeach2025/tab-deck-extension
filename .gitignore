@@ -4,3 +4,8 @@ dist/
 *.zip
 scripts/__pycache__/
 supabase/init/
+config/cloud-config.dev-*.json
+config/cloud-config.prod.json
+config/machine-unbind.json
+config/*.env
+fixtures/dev-seed-data.json

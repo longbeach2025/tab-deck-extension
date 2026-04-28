@@ -12,7 +12,11 @@
     "embed:preprocessed": "node scripts/generate_embeddings_from_preprocessed.mjs",
     "import:preprocessed:supabase": "node scripts/import_preprocessed_to_supabase.mjs",
     "export:init:supabase": "node scripts/export_init_bundle_from_supabase.mjs",
-    "import:init:supabase": "node scripts/import_init_bundle_to_supabase.mjs"
+    "import:init:supabase": "node scripts/import_init_bundle_to_supabase.mjs",
+    "dev:seed": "node scripts/dev_data.mjs seed",
+    "dev:reset": "node scripts/dev_data.mjs reset",
+    "dev:capture-seed": "node scripts/dev_data.mjs capture-seed",
+    "dev:unbind-machine": "node scripts/dev_machine_unbind.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.0"

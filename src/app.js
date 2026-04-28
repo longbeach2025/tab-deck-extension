@@ -16,6 +16,8 @@ import {
   tabToItem
 } from "./storage.js";
 import {
+  bindMachine,
+  ensureCloudEnvironment,
   fetchCloudLinkEmbeddings,
   getCloudConfig,
   getCloudUser,
@@ -43,6 +45,7 @@ let searchEnhancementIndex = createEmptySearchEnhancementIndex();
 let searchEnhancementMeta = createDefaultSearchEnhancementMeta();
 let searchEnhancementBusy = false;
 let searchEnhancementRunState = null;
+let pendingMachineBinding = "";
 let searchConfig = {
   autoRelaxSmartFilters: true,
   llmStrictMode: false,
@@ -194,6 +197,12 @@ const elements = {
   cloudLastSynced: document.querySelector("#cloudLastSynced"),
   cloudPending: document.querySelector("#cloudPending"),
   cloudErrorDetails: document.querySelector("#cloudErrorDetails"),
+  machineBindingGate: document.querySelector("#machineBindingGate"),
+  machineBindingMessage: document.querySelector("#machineBindingMessage"),
+  machineProfilePathInput: document.querySelector("#machineProfilePathInput"),
+  machineConfirmBlock: document.querySelector("#machineConfirmBlock"),
+  machineConfirmText: document.querySelector("#machineConfirmText"),
+  confirmMachineBindingButton: document.querySelector("#confirmMachineBindingButton"),
   saveCloudConfigButton: document.querySelector("#saveCloudConfigButton"),
   signInCloudButton: document.querySelector("#signInCloudButton"),
   signUpCloudButton: document.querySelector("#signUpCloudButton"),
@@ -254,6 +263,13 @@ const elements = {
 init();
 
 async function init() {
+  try {
+    await ensureCloudEnvironment();
+  } catch (error) {
+    showMachineBindingGate(error);
+    return;
+  }
+
   deck = await loadDeck();
   await refreshLiveTabs();
   bindEvents();
@@ -266,6 +282,49 @@ async function init() {
   await loadSearchEnhancementIndex();
   await loadSearchEnhancementMeta();
   renderSearchEnhancementProgress();
+}
+
+function showMachineBindingGate(error) {
+  bindMachineBindingEvents();
+  const message = formatCloudError(error);
+  elements.machineBindingMessage.textContent = message.includes("machine is not bound")
+    ? "Choose the machine for this development Chrome profile. The binding is permanent for this profile."
+    : message;
+  elements.machineBindingGate.classList.remove("hidden");
+}
+
+function bindMachineBindingEvents() {
+  for (const button of document.querySelectorAll("[data-machine-choice]")) {
+    button.addEventListener("click", () => {
+      pendingMachineBinding = button.dataset.machineChoice || "";
+      elements.machineConfirmText.textContent = `This machine is ${pendingMachineBinding}. Confirm binding ${pendingMachineBinding}; this Chrome profile cannot be changed later.`;
+      elements.confirmMachineBindingButton.textContent = `Confirm ${pendingMachineBinding}`;
+      elements.machineConfirmBlock.classList.remove("hidden");
+    });
+  }
+
+  elements.confirmMachineBindingButton.addEventListener("click", confirmMachineBinding);
+}
+
+async function confirmMachineBinding() {
+  if (!pendingMachineBinding) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Confirm binding this Chrome profile to ${pendingMachineBinding}?\nThis profile cannot be switched later. Create a new Chrome profile for another machine.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await bindMachine(pendingMachineBinding, elements.machineProfilePathInput.value);
+    window.location.reload();
+  } catch (error) {
+    elements.machineBindingMessage.textContent = formatCloudError(error);
+    elements.machineBindingMessage.classList.add("warning");
+  }
 }
 
 function bindEvents() {

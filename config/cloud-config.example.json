@@ -1,0 +1,6 @@
+{
+  "environment": "dev",
+  "machine": "reclina",
+  "supabaseUrl": "https://your-dev-project.supabase.co",
+  "anonKey": "your-dev-anon-key"
+}

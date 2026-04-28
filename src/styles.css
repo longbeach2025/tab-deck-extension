@@ -41,6 +41,50 @@ body {
   color: var(--text);
 }
 
+.machine-binding-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.machine-binding-panel {
+  width: min(520px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+
+.machine-binding-panel h2 {
+  margin: 6px 0 10px;
+  font-size: 26px;
+}
+
+.machine-binding-copy {
+  margin-bottom: 18px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.machine-choice-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.machine-confirm-block {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 button,
 input,
 select,

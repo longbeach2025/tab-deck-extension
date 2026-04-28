@@ -2,6 +2,16 @@ import { createClient } from "./vendor/supabase-js.js";
 
 const CLOUD_CONFIG_KEY = "tabDeckCloudConfig";
 const CLOUD_PENDING_DECK_KEY = "tabDeckPendingCloudDeck";
+const MACHINE_BINDING_KEY = "tabDeckMachineBinding";
+const DEV_UNBIND_TOKEN_KEY = "tabDeckDevUnbindToken";
+const MACHINE_OPTIONS = new Set(["reclina", "chenshuo"]);
+const CONFIG_PATHS = {
+  dev: {
+    reclina: "config/cloud-config.dev-reclina.json",
+    chenshuo: "config/cloud-config.dev-chenshuo.json"
+  },
+  prod: "config/cloud-config.prod.json"
+};
 const TABLES = {
   settings: "tab_deck_user_settings",
   spaces: "tab_deck_spaces",
@@ -21,13 +31,95 @@ const BULK_DELETE_LINKS_RATIO_THRESHOLD = 0.01;
 let client;
 let clientSignature = "";
 
+export async function detectEnv() {
+  const manifest = chrome.runtime.getManifest();
+  return {
+    installType: manifest.update_url ? "webstore" : "unpacked",
+    isUnpacked: !manifest.update_url
+  };
+}
+
+export async function getMachineBinding() {
+  const result = await chrome.storage.local.get(MACHINE_BINDING_KEY);
+  const binding = result[MACHINE_BINDING_KEY];
+
+  if (!binding || typeof binding !== "object") {
+    return null;
+  }
+
+  const selectedMachine = normalizeMachine(binding.selected_machine);
+  if (!selectedMachine) {
+    return null;
+  }
+
+  return {
+    selected_machine: selectedMachine,
+    selected_at: String(binding.selected_at || ""),
+    chrome_profile_path: String(binding.chrome_profile_path || "")
+  };
+}
+
+export async function bindMachine(machine, chromeProfilePath) {
+  const selectedMachine = normalizeMachine(machine);
+  if (!selectedMachine) {
+    throw new Error("Choose a valid development machine: reclina or chenshuo.");
+  }
+
+  const existing = await getMachineBinding();
+  if (existing) {
+    throw new Error(
+      `This Chrome profile is already bound to ${existing.selected_machine}. Create a new Chrome profile to use another machine.`
+    );
+  }
+
+  const binding = {
+    selected_machine: selectedMachine,
+    selected_at: new Date().toISOString(),
+    chrome_profile_path: String(chromeProfilePath || "").trim() || "unavailable:chrome-extension-api"
+  };
+  await chrome.storage.local.set({ [MACHINE_BINDING_KEY]: binding });
+  resetClient();
+  return binding;
+}
+
+export async function ensureCloudEnvironment() {
+  await consumeDevUnbindTokenIfPresent();
+  const env = await detectEnv();
+  if (env.isUnpacked && !(await getMachineBinding())) {
+    throw new Error("Development machine is not bound. Bind this Chrome profile before loading Tab Deck.");
+  }
+
+  await getCloudConfig();
+}
+
 export async function getCloudConfig() {
+  const packagedConfig = await loadPackagedCloudConfig();
+  if (packagedConfig) {
+    return packagedConfig;
+  }
+
+  const env = await detectEnv();
+  if (env.isUnpacked) {
+    const binding = await getMachineBinding();
+    const machine = binding?.selected_machine || "unknown";
+    throw new Error(`Missing local dev cloud config for ${machine}. Add config/cloud-config.dev-${machine}.json.`);
+  }
+
   const result = await chrome.storage.local.get(CLOUD_CONFIG_KEY);
-  return normalizeConfig(result[CLOUD_CONFIG_KEY]);
+  return validateCloudConfig(normalizeConfig(result[CLOUD_CONFIG_KEY]), {
+    source: "chrome.storage.local"
+  });
 }
 
 export async function saveCloudConfig(config) {
-  const normalized = normalizeConfig(config);
+  const env = await detectEnv();
+  if (env.isUnpacked) {
+    throw new Error("Dev builds load Supabase config from config/cloud-config.dev-<machine>.json. Manual save is disabled.");
+  }
+
+  const normalized = await validateCloudConfig(normalizeConfig(config), {
+    source: "manual-save"
+  });
   await chrome.storage.local.set({ [CLOUD_CONFIG_KEY]: normalized });
   resetClient();
   return normalized;
@@ -456,13 +548,6 @@ export async function clearPendingCloudDeck() {
   await chrome.storage.local.remove(CLOUD_PENDING_DECK_KEY);
 }
 
-function normalizeConfig(config) {
-  return {
-    supabaseUrl: String(config?.supabaseUrl || "").trim().replace(/\/$/, ""),
-    anonKey: String(config?.anonKey || "").trim()
-  };
-}
-
 async function getRequiredClient() {
   const supabase = await getCloudClient();
 
@@ -788,4 +873,127 @@ async function upsertRowsInChunks(supabase, table, rows, chunkSize) {
 
 function normalizeTrustLevel(value) {
   return value === SYNC_TRUST_LEVEL.untrusted ? SYNC_TRUST_LEVEL.untrusted : SYNC_TRUST_LEVEL.trusted;
+}
+
+async function loadPackagedCloudConfig() {
+  const env = await detectEnv();
+  if (env.isUnpacked) {
+    const binding = await getMachineBinding();
+    if (!binding) {
+      return null;
+    }
+    const path = CONFIG_PATHS.dev[binding.selected_machine];
+    const raw = await readPackagedJson(path);
+    if (!raw) {
+      return null;
+    }
+    return validateCloudConfig(normalizeConfig(raw), {
+      source: path,
+      binding
+    });
+  }
+
+  const raw = await readPackagedJson(CONFIG_PATHS.prod);
+  if (!raw) {
+    return null;
+  }
+  return validateCloudConfig(normalizeConfig(raw), {
+    source: CONFIG_PATHS.prod
+  });
+}
+
+async function readPackagedJson(relativePath) {
+  try {
+    const response = await fetch(chrome.runtime.getURL(relativePath), { cache: "no-store" });
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function validateCloudConfig(config, context = {}) {
+  const env = await detectEnv();
+  const environment = normalizeEnvironment(config.environment);
+  const machine = normalizeMachine(config.machine);
+
+  if (env.isUnpacked) {
+    if (environment === "prod") {
+      throw new Error(`Refusing to load prod Supabase config in unpacked extension (${context.source || "unknown source"}).`);
+    }
+
+    const binding = context.binding || (await getMachineBinding());
+    if (!binding) {
+      throw new Error("Development machine is not bound. Bind this Chrome profile before loading Supabase config.");
+    }
+
+    if (!machine) {
+      throw new Error(`Dev Supabase config must include machine=reclina or machine=chenshuo (${context.source || "unknown source"}).`);
+    }
+
+    if (binding.selected_machine !== machine) {
+      throw new Error(
+        `Wrong dev Supabase config for this Chrome profile. Bound=${binding.selected_machine}, config=${machine}. Create a new profile to switch machines.`
+      );
+    }
+
+    return {
+      ...config,
+      environment: "dev",
+      machine
+    };
+  }
+
+  if (environment !== "prod") {
+    throw new Error(`Refusing to load non-prod Supabase config in packaged extension (${context.source || "unknown source"}).`);
+  }
+
+  return {
+    ...config,
+    environment: "prod",
+    machine: machine || ""
+  };
+}
+
+function normalizeConfig(rawConfig) {
+  const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  return {
+    environment: normalizeEnvironment(next.environment),
+    machine: normalizeMachine(next.machine),
+    supabaseUrl: String(next.supabaseUrl || next.supabase_url || "").trim().replace(/\/$/, ""),
+    anonKey: String(next.anonKey || next.anon_key || next.supabaseAnonKey || next.supabase_anon_key || "").trim()
+  };
+}
+
+function normalizeEnvironment(value) {
+  return value === "prod" || value === "production" ? "prod" : value === "dev" || value === "development" ? "dev" : "";
+}
+
+function normalizeMachine(value) {
+  const machine = String(value || "").trim().toLowerCase();
+  return MACHINE_OPTIONS.has(machine) ? machine : "";
+}
+
+async function consumeDevUnbindTokenIfPresent() {
+  const env = await detectEnv();
+  if (!env.isUnpacked) {
+    return;
+  }
+
+  const token = await readPackagedJson("config/machine-unbind.json");
+  if (!token || token.confirmation !== "UNBIND" || !token.token_id) {
+    return;
+  }
+
+  const result = await chrome.storage.local.get(DEV_UNBIND_TOKEN_KEY);
+  if (result[DEV_UNBIND_TOKEN_KEY] === token.token_id) {
+    return;
+  }
+
+  await chrome.storage.local.remove([MACHINE_BINDING_KEY, CLOUD_CONFIG_KEY, CLOUD_PENDING_DECK_KEY]);
+  await chrome.storage.local.set({ [DEV_UNBIND_TOKEN_KEY]: token.token_id });
+  resetClient();
+  throw new Error("Development machine binding was removed by npm run dev:unbind-machine. Reload and bind a new Chrome profile.");
 }
