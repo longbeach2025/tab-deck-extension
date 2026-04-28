@@ -9,3 +9,4 @@ config/cloud-config.prod.json
 config/machine-unbind.json
 config/*.env
 fixtures/dev-seed-data.json
+reports/health/
