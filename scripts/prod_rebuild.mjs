@@ -316,17 +316,12 @@ async function softDeleteTable(supabase, table, userId, batchSize) {
   const activeRows = rows.filter(isActive);
   const now = new Date().toISOString();
   for (const [index, part] of chunk(activeRows, batchSize).entries()) {
-    const updates = part.map((row) => ({
-      id: row.id,
-      user_id: userId,
-      deleted_at: now,
-      updated_at: now
-    }));
-    const { error } = await supabase.from(table).upsert(updates, { onConflict: "id" });
+    const ids = part.map((row) => row.id);
+    const { error } = await supabase.from(table).update({ deleted_at: now, updated_at: now }).eq("user_id", userId).in("id", ids);
     if (error) {
       throw new Error(`${table} soft delete failed on batch ${index + 1}: ${error.message}`);
     }
-    console.log(`[reset] ${table} batch ${index + 1} rows=${updates.length}`);
+    console.log(`[reset] ${table} batch ${index + 1} rows=${ids.length}`);
   }
   return activeRows.length;
 }
