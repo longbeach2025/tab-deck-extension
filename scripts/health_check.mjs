@@ -248,18 +248,34 @@ function countBy(rows, predicate) {
   return rows.reduce((count, row) => count + (predicate(row) ? 1 : 0), 0);
 }
 
-function buildDuplicateCollectionGroups(collections) {
+function buildDuplicateCollectionGroups(collections, spacesById, activeLinks) {
   const groups = new Map();
   for (const collection of collections) {
     const key = `${collection.user_id || ""}|${collection.space_id || ""}|${String(collection.name || "").trim().toLowerCase()}`;
     if (!groups.has(key)) {
       groups.set(key, []);
     }
-    groups.get(key).push(collection.id);
+    groups.get(key).push(collection);
   }
   return [...groups.entries()]
-    .filter(([, ids]) => ids.length > 1)
-    .map(([key, ids]) => ({ key, ids }));
+    .filter(([, items]) => items.length > 1)
+    .map(([key, items]) => {
+      const first = items[0];
+      return {
+        key,
+        user_id: first.user_id || "",
+        space_id: first.space_id || "",
+        space_name: spacesById.get(first.space_id)?.name || "",
+        name: first.name || "",
+        collections: items.map((collection) => ({
+          id: collection.id,
+          sort_order: collection.sort_order,
+          created_at: collection.created_at,
+          updated_at: collection.updated_at,
+          active_links: activeLinks.filter((link) => link.collection_id === collection.id).length
+        }))
+      };
+    });
 }
 
 function summarizeRows(rows) {
@@ -272,12 +288,37 @@ function summarizeRows(rows) {
   const activeLinks = links.filter(isActive);
   const activeSpaceIds = new Set(activeSpaces.map((space) => space.id));
   const activeCollectionIds = new Set(activeCollections.map((collection) => collection.id));
+  const spacesById = new Map(spaces.map((space) => [space.id, space]));
   const activeUserIds = new Set([...activeSpaces, ...activeCollections, ...activeLinks].map((row) => row.user_id).filter(Boolean));
   const orphanCollections = activeCollections.filter((collection) => !activeSpaceIds.has(collection.space_id));
   const orphanLinks = activeLinks.filter((link) => !activeCollectionIds.has(link.collection_id));
   const emptyTitleLinks = activeLinks.filter((link) => !safeText(link.title));
   const emptyUrlLinks = activeLinks.filter((link) => !safeText(link.url));
-  const duplicateCollections = buildDuplicateCollectionGroups(activeCollections);
+  const duplicateCollections = buildDuplicateCollectionGroups(activeCollections, spacesById, activeLinks);
+  const collectionCountsBySpace = new Map();
+  const linkCountsBySpace = new Map();
+  const linkCountsByCollection = new Map();
+  for (const collection of activeCollections) {
+    collectionCountsBySpace.set(collection.space_id, (collectionCountsBySpace.get(collection.space_id) || 0) + 1);
+  }
+  for (const link of activeLinks) {
+    linkCountsByCollection.set(link.collection_id, (linkCountsByCollection.get(link.collection_id) || 0) + 1);
+  }
+  for (const collection of activeCollections) {
+    linkCountsBySpace.set(collection.space_id, (linkCountsBySpace.get(collection.space_id) || 0) + (linkCountsByCollection.get(collection.id) || 0));
+  }
+  const spaceBreakdown = activeSpaces
+    .map((space) => ({
+      id: space.id,
+      user_id: space.user_id,
+      name: space.name,
+      sort_order: space.sort_order,
+      created_at: space.created_at,
+      updated_at: space.updated_at,
+      active_collections: collectionCountsBySpace.get(space.id) || 0,
+      active_links: linkCountsBySpace.get(space.id) || 0
+    }))
+    .sort((a, b) => b.active_links - a.active_links || b.active_collections - a.active_collections || a.name.localeCompare(b.name));
   const preprocessPresentCount = countBy(activeLinks, (link) => hasObject(link?.metadata) && "preprocess" in link.metadata);
   const preprocessNonEmptyCount = countBy(activeLinks, (link) => hasNonEmptyObject(preprocessOf(link)));
   const embeddingReadyCount = countBy(activeLinks, (link) => preprocessOf(link)?.embeddingStatus === "ready");
@@ -312,6 +353,9 @@ function summarizeRows(rows) {
     users: {
       activeUserCount: activeUserIds.size,
       activeUserIds: [...activeUserIds].sort()
+    },
+    spaces: {
+      breakdown: spaceBreakdown
     },
     preprocess: {
       present: preprocessPresentCount,
@@ -487,6 +531,11 @@ function printSummary(report, paths) {
   console.log(
     `[health-check] active spaces=${summary.active.spaces} collections=${summary.active.collections} links=${summary.active.links}`
   );
+  for (const space of summary.spaces.breakdown.slice(0, 8)) {
+    console.log(
+      `[health-check] space ${space.id} "${space.name}" collections=${space.active_collections} links=${space.active_links}`
+    );
+  }
   console.log(
     `[health-check] preprocess present=${summary.preprocess.present} nonEmpty=${summary.preprocess.nonEmpty} embeddingReady=${summary.embeddings.ready} embeddingVector=${summary.embeddings.withVector}`
   );
