@@ -107,10 +107,18 @@ const AUTO_SAVE_DEFAULT_CONFIG = {
   intervalMinutes: 3
 };
 const DEFAULT_AI_CONFIG = {
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  apiKey: "",
-  model: "gpt-4.1-mini"
+  llm: {
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com/v1",
+    apiKey: "",
+    model: "deepseek-chat"
+  },
+  embedding: {
+    provider: "siliconflow",
+    baseUrl: "https://api.siliconflow.cn/v1",
+    apiKey: "",
+    model: "BAAI/bge-m3"
+  }
 };
 const AI_PROVIDER_PRESETS = {
   openai: {
@@ -120,6 +128,20 @@ const AI_PROVIDER_PRESETS = {
   minimax: {
     baseUrl: "https://api.minimax.io/v1",
     model: "MiniMax-M2.7"
+  },
+  deepseek: {
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-chat"
+  }
+};
+const EMBEDDING_PROVIDER_PRESETS = {
+  siliconflow: {
+    baseUrl: "https://api.siliconflow.cn/v1",
+    model: "BAAI/bge-m3"
+  },
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    model: "text-embedding-3-small"
   }
 };
 const SEARCH_STOP_WORDS = new Set([
@@ -218,6 +240,10 @@ const elements = {
   aiBaseUrlInput: document.querySelector("#aiBaseUrlInput"),
   aiApiKeyInput: document.querySelector("#aiApiKeyInput"),
   aiModelInput: document.querySelector("#aiModelInput"),
+  embeddingProviderSelect: document.querySelector("#embeddingProviderSelect"),
+  embeddingBaseUrlInput: document.querySelector("#embeddingBaseUrlInput"),
+  embeddingApiKeyInput: document.querySelector("#embeddingApiKeyInput"),
+  embeddingModelInput: document.querySelector("#embeddingModelInput"),
   saveAiConfigButton: document.querySelector("#saveAiConfigButton"),
   searchInput: document.querySelector("#searchInput"),
   searchSpaceFilter: document.querySelector("#searchSpaceFilter"),
@@ -394,6 +420,7 @@ function bindEvents() {
   elements.importPrivateInitButton.addEventListener("click", () => elements.importPrivateInitInput.click());
   elements.importPrivateInitInput.addEventListener("change", importPrivateInitBundleFromFile);
   elements.aiProviderSelect.addEventListener("change", onAiProviderChanged);
+  elements.embeddingProviderSelect.addEventListener("change", onEmbeddingProviderChanged);
   elements.saveAiConfigButton.addEventListener("click", saveAiConfig);
 }
 
@@ -498,26 +525,42 @@ async function renderCloudControls() {
 
 async function renderAiControls() {
   const config = await getAiConfig();
-  elements.aiProviderSelect.value = config.provider;
-  elements.aiBaseUrlInput.value = config.baseUrl;
-  elements.aiApiKeyInput.value = config.apiKey;
-  elements.aiModelInput.value = config.model;
-  applyAiProviderUi(config.provider);
+  elements.aiProviderSelect.value = config.llm.provider;
+  elements.aiBaseUrlInput.value = config.llm.baseUrl;
+  elements.aiApiKeyInput.value = config.llm.apiKey;
+  elements.aiModelInput.value = config.llm.model;
+  applyAiProviderUi(config.llm.provider);
+
+  elements.embeddingProviderSelect.value = config.embedding.provider;
+  elements.embeddingBaseUrlInput.value = config.embedding.baseUrl;
+  elements.embeddingApiKeyInput.value = config.embedding.apiKey;
+  elements.embeddingModelInput.value = config.embedding.model;
+  applyEmbeddingProviderUi(config.embedding.provider);
 }
 
 async function saveAiConfig() {
   const config = normalizeAiConfig({
-    provider: elements.aiProviderSelect.value,
-    baseUrl: elements.aiBaseUrlInput.value,
-    apiKey: elements.aiApiKeyInput.value,
-    model: elements.aiModelInput.value
+    llm: {
+      provider: elements.aiProviderSelect.value,
+      baseUrl: elements.aiBaseUrlInput.value,
+      apiKey: elements.aiApiKeyInput.value,
+      model: elements.aiModelInput.value
+    },
+    embedding: {
+      provider: elements.embeddingProviderSelect.value,
+      baseUrl: elements.embeddingBaseUrlInput.value,
+      apiKey: elements.embeddingApiKeyInput.value,
+      model: elements.embeddingModelInput.value
+    }
   });
 
   await chrome.storage.local.set({ [AI_CONFIG_KEY]: config });
   smartSearchLlmCache.clear();
   searchLlmMissingConfigNotified = false;
+  vectorQueryEmbeddingCache.clear();
+  vectorItemEmbeddingCache.clear();
   await renderAiControls();
-  showCloudMessage("LLM search config saved.");
+  showCloudMessage("LLM + embedding config saved.");
   scheduleLlmSmartSearchRefresh(true);
 }
 
@@ -535,10 +578,29 @@ function onAiProviderChanged() {
   }
 }
 
+function onEmbeddingProviderChanged() {
+  const provider = elements.embeddingProviderSelect.value || "siliconflow";
+  applyEmbeddingProviderUi(provider);
+
+  const preset = EMBEDDING_PROVIDER_PRESETS[provider];
+  if (preset) {
+    elements.embeddingBaseUrlInput.value = preset.baseUrl;
+    if (!elements.embeddingModelInput.value.trim() || provider !== "custom") {
+      elements.embeddingModelInput.value = preset.model;
+    }
+  }
+}
+
 function applyAiProviderUi(provider) {
   if (provider === "minimax") {
     elements.aiBaseUrlInput.placeholder = "https://api.minimax.io/v1";
     elements.aiModelInput.placeholder = "MiniMax model name (e.g. MiniMax-M2.7)";
+    return;
+  }
+
+  if (provider === "deepseek") {
+    elements.aiBaseUrlInput.placeholder = "https://api.deepseek.com/v1";
+    elements.aiModelInput.placeholder = "DeepSeek model name (e.g. deepseek-chat)";
     return;
   }
 
@@ -550,6 +612,23 @@ function applyAiProviderUi(provider) {
 
   elements.aiBaseUrlInput.placeholder = "LLM API Base URL (e.g. https://api.openai.com/v1)";
   elements.aiModelInput.placeholder = "Model (e.g. gpt-4.1-mini)";
+}
+
+function applyEmbeddingProviderUi(provider) {
+  if (provider === "siliconflow") {
+    elements.embeddingBaseUrlInput.placeholder = "https://api.siliconflow.cn/v1";
+    elements.embeddingModelInput.placeholder = "Embedding model name (e.g. BAAI/bge-m3)";
+    return;
+  }
+
+  if (provider === "custom") {
+    elements.embeddingBaseUrlInput.placeholder = "Custom Embedding API Base URL";
+    elements.embeddingModelInput.placeholder = "Custom embedding model name";
+    return;
+  }
+
+  elements.embeddingBaseUrlInput.placeholder = "Embedding API Base URL (e.g. https://api.openai.com/v1)";
+  elements.embeddingModelInput.placeholder = "Embedding model (e.g. text-embedding-3-small)";
 }
 
 function renderSpaces() {
@@ -1228,13 +1307,14 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
 
   try {
     const aiConfig = await getAiConfig();
-    if (!aiConfig.apiKey || !aiConfig.baseUrl) {
-      throw new Error("LLM config missing.");
+    const embeddingConfig = aiConfig.embedding || {};
+    if (!embeddingConfig.apiKey || !embeddingConfig.baseUrl) {
+      throw new Error("Embedding config missing.");
     }
 
-    const embeddingModel = resolveVectorEmbeddingModel(aiConfig);
+    const embeddingModel = resolveVectorEmbeddingModel(embeddingConfig);
     const queryText = buildVectorQueryText(criteria);
-    const queryEmbedding = await getQueryEmbeddingVector(queryText, aiConfig, embeddingModel);
+    const queryEmbedding = await getQueryEmbeddingVector(queryText, embeddingConfig, embeddingModel);
     const itemEmbeddings = await getCandidateEmbeddings(candidates);
 
     const scoredCandidates = [];
@@ -1358,9 +1438,9 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
   }
 }
 
-function resolveVectorEmbeddingModel(aiConfig) {
-  const configured = String(aiConfig?.model || "").trim();
-  if (configured.toLowerCase().includes("embedding")) {
+function resolveVectorEmbeddingModel(embeddingConfig) {
+  const configured = String(embeddingConfig?.model || "").trim();
+  if (configured) {
     return configured;
   }
   return VECTOR_EMBEDDING_MODEL_DEFAULT;
@@ -1378,8 +1458,8 @@ function buildVectorQueryText(criteria) {
   return pieces.filter(Boolean).join(" | ");
 }
 
-async function getQueryEmbeddingVector(queryText, aiConfig, model) {
-  const cacheKey = `${aiConfig.baseUrl}|${model}|${queryText}`;
+async function getQueryEmbeddingVector(queryText, embeddingConfig, model) {
+  const cacheKey = `${embeddingConfig.baseUrl}|${model}|${queryText}`;
   const cached = vectorQueryEmbeddingCache.get(cacheKey);
   if (cached) {
     vectorQueryEmbeddingCache.delete(cacheKey);
@@ -1387,11 +1467,11 @@ async function getQueryEmbeddingVector(queryText, aiConfig, model) {
     return cached;
   }
 
-  const response = await fetch(`${aiConfig.baseUrl}/embeddings`, {
+  const response = await fetch(`${embeddingConfig.baseUrl}/embeddings`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${aiConfig.apiKey}`
+      Authorization: `Bearer ${embeddingConfig.apiKey}`
     },
     body: JSON.stringify({
       model,
@@ -4187,16 +4267,47 @@ async function getAutoSaveMeta() {
 
 function normalizeAiConfig(rawConfig) {
   const next = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
-  const provider = next.provider === "minimax" || next.provider === "custom" ? next.provider : "openai";
-  const baseUrl = String(next.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim().replace(/\/$/, "");
-  const apiKey = String(next.apiKey || "").trim();
-  const model = String(next.model || DEFAULT_AI_CONFIG.model).trim();
+  const rawLlm = next.llm && typeof next.llm === "object" ? next.llm : next;
+  const rawEmbedding = next.embedding && typeof next.embedding === "object" ? next.embedding : {};
+
+  const llmProvider =
+    rawLlm.provider === "openai" || rawLlm.provider === "minimax" || rawLlm.provider === "deepseek" || rawLlm.provider === "custom"
+      ? rawLlm.provider
+      : DEFAULT_AI_CONFIG.llm.provider;
+  const llmBaseUrl = String(rawLlm.baseUrl || DEFAULT_AI_CONFIG.llm.baseUrl).trim().replace(/\/$/, "");
+  const llmApiKey = String(rawLlm.apiKey || "").trim();
+  const llmModel = String(rawLlm.model || DEFAULT_AI_CONFIG.llm.model).trim();
+
+  const embeddingProvider =
+    rawEmbedding.provider === "siliconflow" || rawEmbedding.provider === "openai" || rawEmbedding.provider === "custom"
+      ? rawEmbedding.provider
+      : DEFAULT_AI_CONFIG.embedding.provider;
+  const embeddingBaseUrl = String(rawEmbedding.baseUrl || DEFAULT_AI_CONFIG.embedding.baseUrl).trim().replace(/\/$/, "");
+  const embeddingApiKey = String(rawEmbedding.apiKey || "").trim();
+  const embeddingModel = String(rawEmbedding.model || DEFAULT_AI_CONFIG.embedding.model).trim();
+
+  const normalizedLlm = {
+    provider: llmProvider,
+    baseUrl: llmBaseUrl || DEFAULT_AI_CONFIG.llm.baseUrl,
+    apiKey: llmApiKey,
+    model: llmModel || DEFAULT_AI_CONFIG.llm.model
+  };
+
+  const normalizedEmbedding = {
+    provider: embeddingProvider,
+    baseUrl: embeddingBaseUrl || DEFAULT_AI_CONFIG.embedding.baseUrl,
+    apiKey: embeddingApiKey,
+    model: embeddingModel || DEFAULT_AI_CONFIG.embedding.model
+  };
 
   return {
-    provider,
-    baseUrl: baseUrl || DEFAULT_AI_CONFIG.baseUrl,
-    apiKey,
-    model: model || DEFAULT_AI_CONFIG.model
+    llm: normalizedLlm,
+    embedding: normalizedEmbedding,
+    // Compatibility: existing LLM callsites still read top-level fields.
+    provider: normalizedLlm.provider,
+    baseUrl: normalizedLlm.baseUrl,
+    apiKey: normalizedLlm.apiKey,
+    model: normalizedLlm.model
   };
 }
 

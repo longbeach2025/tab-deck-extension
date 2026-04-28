@@ -126,21 +126,36 @@
             <input id="preprocessFastModeToggle" type="checkbox">
             <span>Fast preprocess mode (title + keywords only)</span>
           </label>
-          <select id="aiProviderSelect" aria-label="AI provider">
-            <option value="openai">Provider: OpenAI</option>
-            <option value="minimax">Provider: MiniMax Intl</option>
-            <option value="custom">Provider: Custom</option>
-          </select>
-          <input id="aiBaseUrlInput" type="url" placeholder="LLM API Base URL (e.g. https://api.openai.com/v1)">
-          <input id="aiApiKeyInput" type="password" placeholder="LLM API Key">
-          <input id="aiModelInput" type="text" placeholder="Model (e.g. gpt-4.1-mini)">
+          <div class="cloud-fields">
+            <p class="cloud-meta">LLM Provider (for natural language parsing)</p>
+            <select id="aiProviderSelect" aria-label="LLM provider">
+              <option value="openai">Provider: OpenAI</option>
+              <option value="minimax">Provider: MiniMax Intl</option>
+              <option value="deepseek">Provider: DeepSeek</option>
+              <option value="custom">Provider: Custom</option>
+            </select>
+            <input id="aiBaseUrlInput" type="url" placeholder="LLM API Base URL (e.g. https://api.openai.com/v1)">
+            <input id="aiApiKeyInput" type="password" placeholder="LLM API Key">
+            <input id="aiModelInput" type="text" placeholder="Model (e.g. gpt-4.1-mini)">
+          </div>
+          <div class="cloud-fields">
+            <p class="cloud-meta">Embedding Provider (for vector recall)</p>
+            <select id="embeddingProviderSelect" aria-label="Embedding provider">
+              <option value="siliconflow">Provider: SiliconFlow</option>
+              <option value="openai">Provider: OpenAI</option>
+              <option value="custom">Provider: Custom</option>
+            </select>
+            <input id="embeddingBaseUrlInput" type="url" placeholder="Embedding API Base URL (e.g. https://api.siliconflow.cn/v1)">
+            <input id="embeddingApiKeyInput" type="password" placeholder="Embedding API Key">
+            <input id="embeddingModelInput" type="text" placeholder="Model (e.g. BAAI/bge-m3)">
+          </div>
+          <button id="saveAiConfigButton" class="secondary-button">Save LLM + Embedding config</button>
           <button id="runPreprocessButton" class="secondary-button">Run preprocess batch (200)</button>
           <div class="preprocess-progress-wrap">
             <progress id="preprocessProgressBar" max="100" value="0"></progress>
             <p id="preprocessProgressText" class="cloud-meta">Preprocess progress: 0/0 (0%)</p>
             <p id="preprocessLastFull" class="cloud-meta">Last full preprocess: Never</p>
           </div>
-          <button id="saveAiConfigButton" class="secondary-button">Save LLM config</button>
         </div>
       </div>
 
