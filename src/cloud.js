@@ -12,6 +12,10 @@ const CONFIG_PATHS = {
   },
   prod: "config/cloud-config.prod.json"
 };
+const ALLOWED_DEV_HOSTS = [
+  "fdqxmqyngpjmsayvcxeu.supabase.co"
+];
+const ALLOWED_PROD_HOST = "nasyehnxazcprqqnsdnv.supabase.co";
 const TABLES = {
   settings: "tab_deck_user_settings",
   spaces: "tab_deck_spaces",
@@ -40,23 +44,8 @@ export async function detectEnv() {
 }
 
 export async function getMachineBinding() {
-  const result = await chrome.storage.local.get(MACHINE_BINDING_KEY);
-  const binding = result[MACHINE_BINDING_KEY];
-
-  if (!binding || typeof binding !== "object") {
-    return null;
-  }
-
-  const selectedMachine = normalizeMachine(binding.selected_machine);
-  if (!selectedMachine) {
-    return null;
-  }
-
-  return {
-    selected_machine: selectedMachine,
-    selected_at: String(binding.selected_at || ""),
-    chrome_profile_path: String(binding.chrome_profile_path || "")
-  };
+  const state = await readMachineBindingState();
+  return state.status === "valid" ? state.binding : null;
 }
 
 export async function bindMachine(machine, chromeProfilePath) {
@@ -85,8 +74,8 @@ export async function bindMachine(machine, chromeProfilePath) {
 export async function ensureCloudEnvironment() {
   await consumeDevUnbindTokenIfPresent();
   const env = await detectEnv();
-  if (env.isUnpacked && !(await getMachineBinding())) {
-    throw new Error("Development machine is not bound. Bind this Chrome profile before loading Tab Deck.");
+  if (env.isUnpacked) {
+    assertMachineBindingState(await readMachineBindingState());
   }
 
   await getCloudConfig();
@@ -100,8 +89,9 @@ export async function getCloudConfig() {
 
   const env = await detectEnv();
   if (env.isUnpacked) {
-    const binding = await getMachineBinding();
-    const machine = binding?.selected_machine || "unknown";
+    const state = await readMachineBindingState();
+    assertMachineBindingState(state);
+    const machine = state.binding.selected_machine;
     throw new Error(`Missing local dev cloud config for ${machine}. Add config/cloud-config.dev-${machine}.json.`);
   }
 
@@ -145,6 +135,7 @@ export async function getCloudClient() {
   const signature = `${config.supabaseUrl}|${config.anonKey}`;
 
   if (!client || clientSignature !== signature) {
+    await validateSupabaseUrl(config.supabaseUrl);
     client = createClient(config.supabaseUrl, config.anonKey, {
       auth: {
         autoRefreshToken: true,
@@ -878,14 +869,13 @@ function normalizeTrustLevel(value) {
 async function loadPackagedCloudConfig() {
   const env = await detectEnv();
   if (env.isUnpacked) {
-    const binding = await getMachineBinding();
-    if (!binding) {
-      return null;
-    }
+    const state = await readMachineBindingState();
+    assertMachineBindingState(state);
+    const binding = state.binding;
     const path = CONFIG_PATHS.dev[binding.selected_machine];
     const raw = await readPackagedJson(path);
     if (!raw) {
-      return null;
+      throw new Error(`Missing local dev cloud config for ${binding.selected_machine}. Add ${path}.`);
     }
     return validateCloudConfig(normalizeConfig(raw), {
       source: path,
@@ -900,6 +890,43 @@ async function loadPackagedCloudConfig() {
   return validateCloudConfig(normalizeConfig(raw), {
     source: CONFIG_PATHS.prod
   });
+}
+
+async function readMachineBindingState() {
+  const result = await chrome.storage.local.get(MACHINE_BINDING_KEY);
+  const binding = result[MACHINE_BINDING_KEY];
+
+  if (!binding) {
+    return { status: "missing", binding: null };
+  }
+
+  if (typeof binding !== "object") {
+    return { status: "corrupted", binding: null };
+  }
+
+  const selectedMachine = normalizeMachine(binding.selected_machine);
+  if (!selectedMachine) {
+    return { status: "corrupted", binding: null };
+  }
+
+  return {
+    status: "valid",
+    binding: {
+      selected_machine: selectedMachine,
+      selected_at: String(binding.selected_at || ""),
+      chrome_profile_path: String(binding.chrome_profile_path || "")
+    }
+  };
+}
+
+function assertMachineBindingState(state) {
+  if (state.status === "missing") {
+    throw new Error("Development machine is not bound. Bind this Chrome profile before loading Tab Deck.");
+  }
+
+  if (state.status === "corrupted") {
+    throw new Error("Development machine binding is corrupted. Run npm run dev:unbind-machine, reload, and bind again.");
+  }
 }
 
 async function readPackagedJson(relativePath) {
@@ -918,6 +945,7 @@ async function validateCloudConfig(config, context = {}) {
   const env = await detectEnv();
   const environment = normalizeEnvironment(config.environment);
   const machine = normalizeMachine(config.machine);
+  await validateSupabaseUrl(config.supabaseUrl, env);
 
   if (env.isUnpacked) {
     if (environment === "prod") {
@@ -955,6 +983,30 @@ async function validateCloudConfig(config, context = {}) {
     environment: "prod",
     machine: machine || ""
   };
+}
+
+async function validateSupabaseUrl(url, env = null) {
+  const currentEnv = env || (await detectEnv());
+  let host = "";
+  try {
+    host = new URL(url).host;
+  } catch {
+    throw new Error(`[BUILD GUARD] Invalid Supabase URL: ${url || "empty"}.`);
+  }
+
+  if (currentEnv.isUnpacked) {
+    if (!ALLOWED_DEV_HOSTS.includes(host)) {
+      throw new Error(
+        `[BUILD GUARD] Unpacked extension cannot connect to ${host}. ` +
+          `Only dev hosts allowed: ${ALLOWED_DEV_HOSTS.join(", ")}`
+      );
+    }
+    return;
+  }
+
+  if (host !== ALLOWED_PROD_HOST) {
+    throw new Error(`[BUILD GUARD] Production extension can only connect to ${ALLOWED_PROD_HOST}. Got ${host}`);
+  }
 }
 
 function normalizeConfig(rawConfig) {
