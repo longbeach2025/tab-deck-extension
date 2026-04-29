@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build",
     "package": "./scripts/package_release.sh",
-    "check": "node --check src/storage.js && node --check src/cloud.js && node --check src/app.js && node --check src/popup.js && node --check src/background.js && node --check scripts/health_check.mjs && node --check scripts/prod_rebuild.mjs && python3 -m json.tool manifest.json",
+    "check": "node --check src/storage.js && node --check src/cloud.js && node --check src/app.js && node --check src/popup.js && node --check src/background.js && node --check scripts/health_check.mjs && node --check scripts/prod_rebuild.mjs && node --check scripts/ai_search_baseline.mjs && npm run search:baseline:assert -- --quiet && python3 -m json.tool manifest.json",
     "preprocess:toby:deepseek": "node scripts/toby_preprocess_deepseek.mjs",
     "embed:preprocessed:local": "python3 scripts/generate_embeddings_local_bge_m3.py",
     "embed:preprocessed": "node scripts/generate_embeddings_from_preprocessed.mjs",
@@ -14,6 +14,8 @@
     "export:init:supabase": "node scripts/export_init_bundle_from_supabase.mjs",
     "import:init:supabase": "node scripts/import_init_bundle_to_supabase.mjs",
     "health-check": "node scripts/health_check.mjs",
+    "search:baseline": "node scripts/ai_search_baseline.mjs",
+    "search:baseline:assert": "node scripts/ai_search_baseline.mjs --assert",
     "prod:backup": "node scripts/prod_rebuild.mjs backup",
     "prod:plan": "node scripts/prod_rebuild.mjs plan",
     "prod:reset": "node scripts/prod_rebuild.mjs reset",

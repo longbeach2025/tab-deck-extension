@@ -23,8 +23,6 @@ const TABLES = {
   links: "tab_deck_links"
 };
 const CLOUD_PAGE_SIZE = 1000;
-// Temporary safety lock: set true to block cloud writes during emergency maintenance.
-const SYNC_LOCKED = true;
 const SYNC_TRUST_LEVEL = {
   trusted: "trusted",
   untrusted: "untrusted"
@@ -382,11 +380,6 @@ export async function fetchCloudDeck() {
 }
 
 export async function pushDeckToCloud(deck, syncContext = {}) {
-  if (SYNC_LOCKED) {
-    console.warn("[sync-lock] pushDeckToCloud skipped because SYNC_LOCKED=true");
-    return;
-  }
-
   const trustLevel = normalizeTrustLevel(syncContext?.trustLevel);
   console.log("[sync-context] pushDeckToCloud", { trustLevel, source: syncContext?.source || "unknown" });
   const supabase = await getRequiredClient();
@@ -774,6 +767,7 @@ async function safeUpsertLinks(supabase, userId, linkRows) {
   }
 
   const existingById = await fetchExistingLinkMetadataByIds(supabase, userId, linkRows.map((row) => row.id));
+  const preservedPreprocessIds = [];
   const mergedRows = linkRows.map((row) => {
     const existing = existingById.get(row.id);
     const existingMetadata = existing?.metadata && typeof existing.metadata === "object" ? existing.metadata : {};
@@ -782,7 +776,7 @@ async function safeUpsertLinks(supabase, userId, linkRows) {
     const localPreprocess = localMetadata?.preprocess;
 
     if (existingPreprocess && !localPreprocess) {
-      console.warn(`[sync-protection] preserving cloud preprocess for link ${row.id}`);
+      preservedPreprocessIds.push(row.id);
     }
 
     const metadata = {
@@ -798,6 +792,13 @@ async function safeUpsertLinks(supabase, userId, linkRows) {
       metadata
     };
   });
+
+  if (preservedPreprocessIds.length > 0) {
+    console.info("[sync-protection] preserved cloud preprocess for links", {
+      count: preservedPreprocessIds.length,
+      sampleIds: preservedPreprocessIds.slice(0, 10)
+    });
+  }
 
   await upsertRowsInChunks(supabase, TABLES.links, mergedRows, 200);
 }

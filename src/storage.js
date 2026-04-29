@@ -775,6 +775,16 @@ async function loadCloudDeck() {
         };
       }
 
+      if (safeTs(remoteDeck.updatedAt) >= safeTs(localDeck.updatedAt)) {
+        await writeLocalDeck(remoteDeck);
+        await clearPendingCloudDeck();
+        setCloudStatus("Supabase cloud sync is active.");
+        return {
+          deck: normalizeDeck(remoteDeck),
+          trustLevel: SYNC_TRUST_LEVEL.trusted
+        };
+      }
+
       const mergedDeck = mergeDecks(localDeck, remoteDeck);
       await writeLocalDeck(mergedDeck);
       await pushDeckToCloud(mergedDeck, { trustLevel: SYNC_TRUST_LEVEL.trusted, source: "loadCloudDeck-merged" });

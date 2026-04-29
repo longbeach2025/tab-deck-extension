@@ -56,8 +56,7 @@ const SEARCH_LLM_DEBOUNCE_MS = 420;
 const VECTOR_SEARCH_DEBOUNCE_MS = 260;
 const VECTOR_CANDIDATE_LIMIT = 260;
 const VECTOR_TOPK_LIMIT = 80;
-const VECTOR_PRIORITY_MAX_RESULTS = 300;
-const VECTOR_MIX_WEIGHT = 12;
+const VECTOR_MIX_WEIGHT = 2;
 const VECTOR_SEARCH_CACHE_LIMIT = 80;
 const VECTOR_EMBEDDING_MODEL_DEFAULT = "text-embedding-3-small";
 const VECTOR_SEARCH_DEBUG = false;
@@ -196,14 +195,15 @@ const SEARCH_TERM_EXPANSIONS = {
   auth: ["authentication", "login", "oauth", "登录", "鉴权"]
 };
 const SEARCH_HOST_ALIASES = {
-  github: "github.com",
-  supabase: "supabase.com",
-  openai: "openai.com",
-  notion: "notion.so",
-  youtube: "youtube.com",
-  twitter: "x.com",
-  reddit: "reddit.com",
-  stackoverflow: "stackoverflow.com"
+  github: ["github.com"],
+  supabase: ["supabase.com"],
+  openai: ["openai.com"],
+  notion: ["notion.so"],
+  youtube: ["youtube.com"],
+  twitter: ["twitter.com", "x.com"],
+  x: ["x.com", "twitter.com"],
+  reddit: ["reddit.com"],
+  stackoverflow: ["stackoverflow.com"]
 };
 
 const elements = {
@@ -1149,7 +1149,10 @@ function createDefaultVectorSearchState() {
     rankedItemIds: [],
     strategy: "mix",
     appliedCount: 0,
+    candidateCount: 0,
+    totalResultCount: 0,
     topKCount: 0,
+    elapsedMs: 0,
     model: "",
     error: ""
   };
@@ -1247,13 +1250,17 @@ function getVectorSearchMetaLabel(searchState) {
 
   if (searchState.vectorApplied) {
     const strategyLabel = vectorSearchState.strategy === "priority" ? "priority" : "mix";
-    return `Vector recall: ${strategyLabel} Top ${vectorSearchState.topKCount || 0} (${vectorSearchState.appliedCount} scored).`;
+    const elapsedLabel = vectorSearchState.elapsedMs ? `, ${vectorSearchState.elapsedMs}ms` : "";
+    return `Vector recall: ${strategyLabel} Top ${vectorSearchState.topKCount || 0} (${vectorSearchState.appliedCount}/${
+      vectorSearchState.candidateCount || 0
+    } scored${elapsedLabel}).`;
   }
   if (searchState.vectorPending) {
-    return "Vector recall: computing...";
+    return `Vector recall: computing ${vectorSearchState.candidateCount || 0} candidates...`;
   }
   if (vectorSearchState.signature === searchState.vectorSignature && vectorSearchState.status === "failed") {
-    return `Vector recall: fallback lexical only (${vectorSearchState.error || "embedding unavailable"}).`;
+    const elapsedLabel = vectorSearchState.elapsedMs ? `, ${vectorSearchState.elapsedMs}ms` : "";
+    return `Vector recall: fallback lexical only (${vectorSearchState.error || "embedding unavailable"}${elapsedLabel}).`;
   }
   return "Vector recall: lexical baseline.";
 }
@@ -1299,7 +1306,10 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
     rankedItemIds: [],
     strategy: "mix",
     appliedCount: 0,
+    candidateCount: candidates.length,
+    totalResultCount,
     topKCount: 0,
+    elapsedMs: 0,
     model: "",
     error: ""
   };
@@ -1349,7 +1359,10 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
         rankedItemIds: [],
         strategy: "mix",
         appliedCount: 0,
+        candidateCount: candidates.length,
+        totalResultCount,
         topKCount: 0,
+        elapsedMs: Date.now() - startedAt,
         model: embeddingModel,
         error: "no usable embeddings in candidates"
       };
@@ -1368,7 +1381,7 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
     scoredCandidates.sort(
       (a, b) => b.vectorScore - a.vectorScore || b.lexicalScore - a.lexicalScore || b.activityTs - a.activityTs
     );
-    const strategy = totalResultCount <= VECTOR_PRIORITY_MAX_RESULTS ? "priority" : "mix";
+    const strategy = "mix";
     const topK = scoredCandidates.slice(0, VECTOR_TOPK_LIMIT);
     const scoresByItemId = {};
     const rankedItemIds = [];
@@ -1385,7 +1398,10 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
       rankedItemIds,
       strategy,
       appliedCount: scoredCandidates.length,
+      candidateCount: candidates.length,
+      totalResultCount,
       topKCount: topK.length,
+      elapsedMs: Date.now() - startedAt,
       model: embeddingModel,
       error: ""
     };
@@ -1421,7 +1437,10 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
       rankedItemIds: [],
       strategy: "mix",
       appliedCount: 0,
+      candidateCount: candidates.length,
+      totalResultCount,
       topKCount: 0,
+      elapsedMs: Date.now() - startedAt,
       model: "",
       error: formatCloudError(error)
     };
@@ -1830,6 +1849,7 @@ function isItemMatchFilters(collection, item, space = getActiveSpace(deck), crit
   const host = getHost(item.url || "").toLowerCase();
   const activityTs = getItemActivityTimestamp(item);
   const effectiveHost = criteria.host || "";
+  const effectiveHosts = getHostFilterCandidates(effectiveHost);
   const effectiveDateFrom = criteria.dateFrom || "";
   const effectiveDateTo = criteria.dateTo || "";
   const searchDateFromTs = effectiveDateFrom ? Date.parse(`${effectiveDateFrom}T00:00:00`) : 0;
@@ -1840,7 +1860,7 @@ function isItemMatchFilters(collection, item, space = getActiveSpace(deck), crit
     return false;
   }
 
-  if (effectiveHost && !host.includes(effectiveHost)) {
+  if (effectiveHosts.length > 0 && !effectiveHosts.some((candidate) => host.includes(candidate))) {
     return false;
   }
 
@@ -2104,11 +2124,23 @@ function extractHostFilter(input) {
   for (const token of tokens) {
     const mapped = SEARCH_HOST_ALIASES[token];
     if (mapped) {
-      return mapped;
+      return normalizeHostAliasValue(mapped);
     }
   }
 
   return "";
+}
+
+function normalizeHostAliasValue(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean).join("|");
+}
+
+function getHostFilterCandidates(value) {
+  return String(value || "")
+    .split("|")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function parseRelativeDateRange(input) {
@@ -2237,7 +2269,20 @@ function doesValueMatchSearchTerms(value, terms) {
     return false;
   }
 
-  return terms.some((term) => normalized.includes(term));
+  return terms.some((term) => doesTermMatchValue(term, normalized));
+}
+
+function doesTermMatchValue(term, normalizedValue) {
+  const normalizedTerm = String(term || "").toLowerCase();
+  if (!normalizedTerm) {
+    return false;
+  }
+
+  if (/^[a-z0-9][a-z0-9._-]*$/.test(normalizedTerm)) {
+    return tokenizeSearchInput(normalizedValue).some((token) => token === normalizedTerm || token.split(/[._-]+/).includes(normalizedTerm));
+  }
+
+  return normalizedValue.includes(normalizedTerm);
 }
 
 function computeSearchScore(space, collection, item, terms = getActiveSearchTerms()) {
@@ -2252,32 +2297,39 @@ function computeSearchScore(space, collection, item, terms = getActiveSearchTerm
   const spaceName = String(space.name || "").toLowerCase();
   const collectionNotes = String(collection.notes || "").toLowerCase();
   const enhancementTerms = getSearchEnhancementTerms(item);
+  const searchValues = [title, url, host, collectionName, collectionNotes, spaceName, ...enhancementTerms];
   let score = 0;
 
   for (const term of terms) {
-    if (title.includes(term)) {
-      score += 8;
+    const termWeight = getSearchTermWeight(term);
+    if (doesTermMatchValue(term, title)) {
+      score += 8 * termWeight;
     }
-    if (url.includes(term)) {
-      score += 5;
+    if (doesTermMatchValue(term, url)) {
+      score += 5 * termWeight;
     }
-    if (host.includes(term)) {
-      score += 4;
+    if (doesTermMatchValue(term, host)) {
+      score += 4 * termWeight;
     }
-    if (collectionName.includes(term)) {
-      score += 3;
+    if (doesTermMatchValue(term, collectionName)) {
+      score += 3 * termWeight;
     }
-    if (collectionNotes.includes(term)) {
-      score += 2;
+    if (doesTermMatchValue(term, collectionNotes)) {
+      score += 2 * termWeight;
     }
-    if (spaceName.includes(term)) {
-      score += 1;
+    if (doesTermMatchValue(term, spaceName)) {
+      score += 1 * termWeight;
     }
     for (const enhancementTerm of enhancementTerms) {
-      if (enhancementTerm.includes(term)) {
-        score += 4;
+      if (doesTermMatchValue(term, enhancementTerm)) {
+        score += 4 * termWeight;
       }
     }
+  }
+
+  const primaryKeywords = getPrimaryScoringKeywords();
+  if (primaryKeywords.length >= 2 && primaryKeywords.every((term) => searchValues.some((value) => doesTermMatchValue(term, value)))) {
+    score += 10;
   }
 
   if (query && query.length >= 4 && (title.includes(query) || url.includes(query))) {
@@ -2286,6 +2338,21 @@ function computeSearchScore(space, collection, item, terms = getActiveSearchTerm
 
   score += getRecencyScore(item);
   return score;
+}
+
+function getSearchTermWeight(term) {
+  const normalizedTerm = String(term || "").toLowerCase();
+  const primaryKeywords = getPrimaryScoringKeywords();
+  if (primaryKeywords.length === 0 || primaryKeywords.includes(normalizedTerm)) {
+    return 1;
+  }
+  return 0.25;
+}
+
+function getPrimaryScoringKeywords() {
+  return Array.from(
+    new Set((Array.isArray(smartSearchHints.keywords) ? smartSearchHints.keywords : []).map((term) => String(term || "").toLowerCase()).filter(Boolean))
+  );
 }
 
 function getRecencyScore(item) {
