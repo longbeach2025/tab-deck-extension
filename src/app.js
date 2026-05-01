@@ -1035,6 +1035,9 @@ function buildSearchResults() {
     if (fallbackResults.length > 0) {
       return finalizeSearchResults(fallbackResults, plan.criteria, plan.label);
     }
+    if (plan.semanticOnly) {
+      return finalizeSearchResults([], plan.criteria, plan.label);
+    }
   }
 
   return {
@@ -1100,6 +1103,17 @@ function createFallbackSearchPlans(baseCriteria) {
         host: searchFilters.host || ""
       },
       label: "No exact match. Showing relaxed results without smart host constraints."
+    });
+  }
+
+  if (hasSmartHostOnly && !allowSmartHostRelaxation) {
+    plans.push({
+      criteria: {
+        ...baseCriteria,
+        host: searchFilters.host || ""
+      },
+      label: "No lexical match. Showing semantic recall without smart host constraints.",
+      semanticOnly: true
     });
   }
 
