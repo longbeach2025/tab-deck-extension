@@ -1,6 +1,6 @@
 # Phase 5 AI Search Notes
 
-Date: 2026-04-29
+Date: 2026-05-01
 
 ## Baseline
 
@@ -26,31 +26,43 @@ Date: 2026-04-29
   - local search enhancement terms: 4
   - exact query in title/URL: +12
   - recency score: 0-8
-- Vector search is an async rerank step:
+- Vector search now runs as an async semantic supplemental recall step:
   - only when sorting by recent activity
   - only when there is a query/term/filter
-  - only over the current lexical result set
-  - only over the first 260 candidates
-  - top 80 vector-scored candidates affect final order
+  - lexical search still builds the primary result set
+  - semantic scoring now evaluates the full active filter-matched corpus, not only the lexical candidate subset
+  - top 80 semantic candidates are retained
+  - lexical hits remain primary; semantic-only hits are appended as supplemental recall
 - Cloud embeddings are fetched by link id if not present locally.
 - Cloud sync preserves existing `metadata.preprocess` when local rows lack preprocess.
 
-## First Accuracy Risk
+## Historical Accuracy Risk
 
-The current vector step reranks lexical candidates but does not recall semantic-only matches from the full 3320-link dataset. If a relevant page is only discoverable through embedding similarity and none of the query terms appear in title, URL, collection, notes, or preprocess terms, it never reaches vector search.
+The original vector step only reranked lexical candidates and could not recall semantic-only matches from the full 3320-link dataset. If a relevant page was only discoverable through embedding similarity and none of the query terms appeared in title, URL, collection, notes, or preprocess terms, it never reached vector search.
 
-## Deferred Semantic Recall
+## Full-Corpus Semantic Recall
 
-Full-corpus vector recall is a Phase 5 requirement, but it is intentionally deferred until the lower-cost search quality work is complete. The intended design is a semantic supplemental recall layer, not a replacement for lexical search:
+Full-corpus vector recall is now in implementation. The current design remains a semantic supplemental recall layer, not a replacement for lexical search:
 
 - keep lexical ranking as the primary stable fallback
-- retrieve semantic topK from the full active corpus
+- retrieve semantic topK from the full active filter-matched corpus
 - merge semantic candidates with lexical candidates by id
 - preserve explicit user filters as hard constraints
 - blend vector score conservatively so exact title/URL/host matches are not displaced by weak semantic matches
 - add debug counts for corpus size, vector-scored count, semantic-added count, and elapsed time
 
-Expected implementation size is larger than the current low-risk fixes because it needs embedding index caching, async state updates, result merging, and ranking controls.
+Current implementation status in `src/app.js`:
+
+- lexical results are still built first with `collectSearchResults()`
+- semantic scoring now runs over `collectSearchCorpusResults()` which reuses the same explicit filters but removes lexical term matching
+- lexical hits are reranked conservatively with vector scores
+- semantic-only topK hits are appended after lexical hits
+- vector state now tracks:
+  - `corpusCount`
+  - `semanticAddedCount`
+  - `orderedResults`
+
+This has passed local code checks but still needs manual UI validation on the active `chenshuo` dev machine before being treated as the new stable Phase 5 checkpoint.
 
 ## Baseline Command
 
@@ -68,14 +80,15 @@ This reads `supabase/init/alpha27/tab-deck-alpha27-init-bundle.json.gz` and runs
 
 ## Vector Observability
 
-The UI vector recall label now exposes the key rerank counters:
+The UI vector recall label now exposes the key semantic recall counters:
 
 - strategy: `mix`
 - topK count
-- scored candidate count over rerank candidate count
+- scored corpus count
+- semantic-added count
 - elapsed milliseconds when available
 
-Pending state also reports the current candidate count. This is still the existing lexical-candidate rerank path, not full-corpus semantic recall.
+Pending state now reports corpus computation rather than only lexical candidate rerank progress.
 
 Manual UI validation showed that the old pure-vector `priority` strategy could over-promote semantically broad Kadena pages and push the exact `Kadena 主网上线` Jinse article down to positions 9/10. Switching to `mix` helped the strategy label, but a vector weight of 12 still pushed the Jinse article below the top 10. The current rerank path uses `mix` with a low vector weight so lexical strength remains the primary ordering signal.
 
@@ -105,8 +118,8 @@ Use dev `test user 2` for UI validation. Suggested queries:
 Expected behavior:
 
 - fixed lexical queries should match the baseline top results
-- `supabase sync error` is allowed to remain empty until deferred full-corpus semantic recall is implemented
-- vector recall label should show candidate/scored counters and elapsed time when embedding config is present
+- `supabase sync error` should be re-tested after LLM + embedding config is present because semantic supplemental recall is no longer deferred in code
+- vector recall label should show scored corpus count, semantic-added count, and elapsed time when embedding config is present
 - vector recall should report `mix`, not `priority`
 
 Note: `dist/unpacked` is generated by `npm run package`. Local private cloud config files are intentionally ignored and are not copied by the public package script.
@@ -121,6 +134,12 @@ Latest local checks completed:
 - `npm run build`
 - `npm run package`
 - dev mirror health-check for `test user 2`: `ok`
+
+Latest code-state note:
+
+- full-corpus semantic supplemental recall has been implemented locally in `src/app.js`
+- this code path has passed local `npm run check`
+- it still requires manual UI validation on `chenshuo` before checkpoint/commit
 
 The generated `dist/`, `reports/`, local config files, backups, and `supabase/init/` remain git-ignored.
 
@@ -147,6 +166,8 @@ The generated `dist/`, `reports/`, local config files, backups, and `supabase/in
 
 ## Next TODO
 
-1. Profile startup/cloud deck load time for the 3320-link dev mirror.
-2. If load performance profiling is deferred, commit the Phase 5 baseline/search-quality checkpoint.
-3. Re-run `npm run search:baseline`, `npm run check`, and dev health-check after each search change.
+1. Manually validate the new semantic supplemental recall path on `chenshuo` with the active Phase 5 profile.
+2. Verify whether `supabase sync error` now surfaces useful semantic-only matches when embedding config is present.
+3. Decide whether semantic-only hits should remain appended after lexical hits or be interleaved more aggressively.
+4. After UI validation, re-run `npm run search:baseline`, `npm run check`, and dev health-check, then checkpoint/commit.
+5. Profile startup/cloud deck load time for the 3320-link dev mirror as the next independent performance task.

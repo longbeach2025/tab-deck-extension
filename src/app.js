@@ -194,6 +194,27 @@ const SEARCH_TERM_EXPANSIONS = {
   api: ["endpoint", "sdk", "接口"],
   auth: ["authentication", "login", "oauth", "登录", "鉴权"]
 };
+const SEMANTIC_GUARDRAIL_GENERIC_TERMS = new Set([
+  "api",
+  "auth",
+  "bug",
+  "docs",
+  "documentation",
+  "error",
+  "fix",
+  "guide",
+  "issue",
+  "login",
+  "manual",
+  "oauth",
+  "sync",
+  "同步",
+  "报错",
+  "教程",
+  "文档",
+  "错误",
+  "问题"
+]);
 const SEARCH_HOST_ALIASES = {
   github: ["github.com"],
   supabase: ["supabase.com"],
@@ -1020,7 +1041,7 @@ function buildSearchResults() {
     results: [],
     fallbackLabel: "",
     criteria: baseCriteria,
-    vectorSignature: "",
+    vectorSignature: createVectorSearchSignature(baseCriteria),
     vectorApplied: false,
     vectorPending: false
   };
@@ -1147,11 +1168,14 @@ function createDefaultVectorSearchState() {
     status: "idle",
     scoresByItemId: {},
     rankedItemIds: [],
+    orderedResults: [],
     strategy: "mix",
     appliedCount: 0,
     candidateCount: 0,
     totalResultCount: 0,
+    corpusCount: 0,
     topKCount: 0,
+    semanticAddedCount: 0,
     elapsedMs: 0,
     model: "",
     error: ""
@@ -1163,28 +1187,21 @@ function createVectorSearchSignature(criteria, results) {
     return "";
   }
 
-  const candidateIds = results
-    .slice(0, VECTOR_CANDIDATE_LIMIT)
-    .map((result) => result?.item?.id)
-    .filter(Boolean)
-    .join(",");
-
   return JSON.stringify({
     q: query,
     terms: criteria.terms,
     host: criteria.host || "",
     dateFrom: criteria.dateFrom || "",
     dateTo: criteria.dateTo || "",
+    spaceId: searchFilters.spaceId,
+    collection: searchFilters.collection,
     sort: searchFilters.sortBy,
-    candidates: candidateIds
+    deckUpdatedAt: deck?.updatedAt || ""
   });
 }
 
 function shouldRunVectorSearch(criteria, results) {
   if (searchFilters.sortBy !== "recent_activity") {
-    return false;
-  }
-  if (!Array.isArray(results) || results.length === 0) {
     return false;
   }
   if (!String(query || "").trim()) {
@@ -1193,7 +1210,12 @@ function shouldRunVectorSearch(criteria, results) {
 
   const hasTerms = Array.isArray(criteria?.terms) && criteria.terms.length > 0;
   const hasStructuredFilter = Boolean(criteria?.host || criteria?.dateFrom || criteria?.dateTo || searchFilters.collection);
-  return hasTerms || hasStructuredFilter;
+  if (!(hasTerms || hasStructuredFilter)) {
+    return false;
+  }
+
+  const corpusCandidates = collectSearchCorpusResults(criteria);
+  return corpusCandidates.length > 0;
 }
 
 function applyVectorSearchScores(results, signature) {
@@ -1209,35 +1231,8 @@ function applyVectorSearchScores(results, signature) {
     return { results, applied: false, pending };
   }
 
-  const rankByItemId = new Map((vectorSearchState.rankedItemIds || []).map((itemId, index) => [itemId, index]));
-  const scoresByItemId = vectorSearchState.scoresByItemId || {};
-  const strategy = vectorSearchState.strategy || "mix";
-  const reranked = [...results];
-  reranked.sort((a, b) => {
-    const aRank = rankByItemId.has(a.item.id) ? rankByItemId.get(a.item.id) : Number.POSITIVE_INFINITY;
-    const bRank = rankByItemId.has(b.item.id) ? rankByItemId.get(b.item.id) : Number.POSITIVE_INFINITY;
-    if (strategy === "priority" && aRank !== bRank) {
-      return aRank - bRank;
-    }
-
-    const aVector = Number(scoresByItemId[a.item.id]);
-    const bVector = Number(scoresByItemId[b.item.id]);
-    if (Number.isFinite(aVector) || Number.isFinite(bVector)) {
-      if (Number.isFinite(aVector) && Number.isFinite(bVector) && aVector !== bVector) {
-        return bVector - aVector;
-      }
-      if (Number.isFinite(aVector) && !Number.isFinite(bVector)) {
-        return -1;
-      }
-      if (!Number.isFinite(aVector) && Number.isFinite(bVector)) {
-        return 1;
-      }
-    }
-
-    return b.score - a.score || getItemActivityTimestamp(b.item) - getItemActivityTimestamp(a.item);
-  });
   return {
-    results: reranked,
+    results: Array.isArray(vectorSearchState.orderedResults) ? vectorSearchState.orderedResults : results,
     applied: true,
     pending: false
   };
@@ -1251,12 +1246,13 @@ function getVectorSearchMetaLabel(searchState) {
   if (searchState.vectorApplied) {
     const strategyLabel = vectorSearchState.strategy === "priority" ? "priority" : "mix";
     const elapsedLabel = vectorSearchState.elapsedMs ? `, ${vectorSearchState.elapsedMs}ms` : "";
+    const semanticLabel = Number.isFinite(vectorSearchState.semanticAddedCount) ? `, +${vectorSearchState.semanticAddedCount} semantic` : "";
     return `Vector recall: ${strategyLabel} Top ${vectorSearchState.topKCount || 0} (${vectorSearchState.appliedCount}/${
-      vectorSearchState.candidateCount || 0
-    } scored${elapsedLabel}).`;
+      vectorSearchState.corpusCount || 0
+    } scored${semanticLabel}${elapsedLabel}).`;
   }
   if (searchState.vectorPending) {
-    return `Vector recall: computing ${vectorSearchState.candidateCount || 0} candidates...`;
+    return `Vector recall: computing ${vectorSearchState.corpusCount || vectorSearchState.candidateCount || 0} corpus items...`;
   }
   if (vectorSearchState.signature === searchState.vectorSignature && vectorSearchState.status === "failed") {
     const elapsedLabel = vectorSearchState.elapsedMs ? `, ${vectorSearchState.elapsedMs}ms` : "";
@@ -1280,21 +1276,20 @@ function scheduleVectorSearchRerank(searchState) {
     return;
   }
 
-  const candidates = (searchState.results || []).slice(0, VECTOR_CANDIDATE_LIMIT);
-  if (candidates.length === 0) {
-    return;
-  }
-  const totalResultCount = Array.isArray(searchState.results) ? searchState.results.length : candidates.length;
-
   vectorSearchDebounceTimer = setTimeout(() => {
-    runVectorSearchRerank(signature, searchState.criteria, candidates, totalResultCount).catch(() => {});
+    runVectorSearchRerank(signature, searchState.criteria, searchState.results || []).catch(() => {});
   }, VECTOR_SEARCH_DEBOUNCE_MS);
 }
 
-async function runVectorSearchRerank(signature, criteria, candidates, totalResultCount = candidates.length) {
+async function runVectorSearchRerank(signature, criteria, lexicalResults) {
   const requestId = ++vectorSearchRequestId;
   const startedAt = Date.now();
-  const lexicalTop = candidates.slice(0, 5).map((entry) => ({
+  const lexicalCandidates = Array.isArray(lexicalResults) ? lexicalResults : [];
+  const corpusCandidates = collectSearchCorpusResults(criteria);
+  if (corpusCandidates.length === 0) {
+    return;
+  }
+  const lexicalTop = lexicalCandidates.slice(0, 5).map((entry) => ({
     id: entry?.item?.id || "",
     title: String(entry?.item?.title || "").slice(0, 80),
     score: Number(entry?.score || 0).toFixed(2)
@@ -1304,11 +1299,14 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
     status: "running",
     scoresByItemId: {},
     rankedItemIds: [],
+    orderedResults: [],
     strategy: "mix",
     appliedCount: 0,
-    candidateCount: candidates.length,
-    totalResultCount,
+    candidateCount: lexicalCandidates.length,
+    totalResultCount: lexicalCandidates.length,
+    corpusCount: corpusCandidates.length,
     topKCount: 0,
+    semanticAddedCount: 0,
     elapsedMs: 0,
     model: "",
     error: ""
@@ -1325,10 +1323,11 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
     const embeddingModel = resolveVectorEmbeddingModel(embeddingConfig);
     const queryText = buildVectorQueryText(criteria);
     const queryEmbedding = await getQueryEmbeddingVector(queryText, embeddingConfig, embeddingModel);
-    const itemEmbeddings = await getCandidateEmbeddings(candidates);
+    const itemEmbeddings = await getCandidateEmbeddings(corpusCandidates);
+    const corpusByItemId = new Map(corpusCandidates.map((entry) => [entry.item.id, entry]));
 
     const scoredCandidates = [];
-    for (const candidate of candidates) {
+    for (const candidate of corpusCandidates) {
       const embedding = itemEmbeddings.get(candidate.item.id);
       if (!embedding) {
         continue;
@@ -1357,11 +1356,14 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
         status: "failed",
         scoresByItemId: {},
         rankedItemIds: [],
+        orderedResults: [],
         strategy: "mix",
         appliedCount: 0,
-        candidateCount: candidates.length,
-        totalResultCount,
+        candidateCount: lexicalCandidates.length,
+        totalResultCount: lexicalCandidates.length,
+        corpusCount: corpusCandidates.length,
         topKCount: 0,
+        semanticAddedCount: 0,
         elapsedMs: Date.now() - startedAt,
         model: embeddingModel,
         error: "no usable embeddings in candidates"
@@ -1371,7 +1373,8 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
         console.info("[vector-search] no-usable-embeddings", {
           query,
           signature,
-          candidateCount: candidates.length,
+          candidateCount: lexicalCandidates.length,
+          corpusCount: corpusCandidates.length,
           elapsedMs: Date.now() - startedAt
         });
       }
@@ -1390,17 +1393,22 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
         strategy === "priority" ? entry.vectorScore : entry.lexicalScore + entry.vectorScore * VECTOR_MIX_WEIGHT;
       rankedItemIds.push(entry.itemId);
     }
+    const orderedResults = mergeSemanticSearchResults(lexicalCandidates, topK, corpusByItemId, scoresByItemId);
+    const semanticAddedCount = Math.max(0, orderedResults.length - lexicalCandidates.length);
 
     vectorSearchState = {
       signature,
       status: "ready",
       scoresByItemId,
       rankedItemIds,
+      orderedResults,
       strategy,
       appliedCount: scoredCandidates.length,
-      candidateCount: candidates.length,
-      totalResultCount,
+      candidateCount: lexicalCandidates.length,
+      totalResultCount: lexicalCandidates.length,
+      corpusCount: corpusCandidates.length,
       topKCount: topK.length,
+      semanticAddedCount,
       elapsedMs: Date.now() - startedAt,
       model: embeddingModel,
       error: ""
@@ -1416,10 +1424,12 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
         query,
         model: embeddingModel,
         strategy,
-        totalResultCount,
-        candidateCount: candidates.length,
+        totalResultCount: lexicalCandidates.length,
+        candidateCount: lexicalCandidates.length,
+        corpusCount: corpusCandidates.length,
         appliedCount: scoredCandidates.length,
         topKCount: topK.length,
+        semanticAddedCount,
         elapsedMs: Date.now() - startedAt,
         lexicalTop,
         rerankedTop
@@ -1435,11 +1445,14 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
       status: "failed",
       scoresByItemId: {},
       rankedItemIds: [],
+      orderedResults: [],
       strategy: "mix",
       appliedCount: 0,
-      candidateCount: candidates.length,
-      totalResultCount,
+      candidateCount: lexicalCandidates.length,
+      totalResultCount: lexicalCandidates.length,
+      corpusCount: corpusCandidates.length,
       topKCount: 0,
+      semanticAddedCount: 0,
       elapsedMs: Date.now() - startedAt,
       model: "",
       error: formatCloudError(error)
@@ -1455,6 +1468,92 @@ async function runVectorSearchRerank(signature, criteria, candidates, totalResul
     }
     renderSearchResults();
   }
+}
+
+function mergeSemanticSearchResults(lexicalResults, semanticTop, corpusByItemId, scoresByItemId) {
+  const lexicalEntries = Array.isArray(lexicalResults) ? [...lexicalResults] : [];
+  const lexicalIds = new Set(lexicalEntries.map((entry) => entry?.item?.id).filter(Boolean));
+  const rerankedLexical = rankLexicalVectorResults(lexicalEntries, scoresByItemId);
+  const semanticOnlyResults = [];
+
+  for (const semanticEntry of semanticTop) {
+    const itemId = semanticEntry?.itemId;
+    if (!itemId || lexicalIds.has(itemId)) {
+      continue;
+    }
+    const corpusEntry = corpusByItemId.get(itemId);
+    if (corpusEntry && semanticCandidatePassesGuardrails(corpusEntry)) {
+      semanticOnlyResults.push(corpusEntry);
+    }
+  }
+
+  return rerankedLexical.concat(semanticOnlyResults);
+}
+
+function semanticCandidatePassesGuardrails(entry) {
+  if (!entry?.item) {
+    return false;
+  }
+
+  const host = getHost(entry.item.url || "").toLowerCase();
+  const effectiveHosts = getHostFilterCandidates(getEffectiveHostFilter());
+  if (effectiveHosts.length > 0 && effectiveHosts.some((candidate) => host.includes(candidate))) {
+    return true;
+  }
+
+  const anchorTerms = getSemanticAnchorTerms();
+  if (anchorTerms.length === 0) {
+    return effectiveHosts.length === 0;
+  }
+
+  const searchValues = [
+    String(entry.item.title || "").toLowerCase(),
+    String(entry.item.url || "").toLowerCase(),
+    host,
+    String(entry.collectionName || "").toLowerCase(),
+    String(entry.spaceName || "").toLowerCase(),
+    ...getSearchEnhancementTerms(entry.item)
+  ];
+  return anchorTerms.some((term) => searchValues.some((value) => doesTermMatchValue(term, value)));
+}
+
+function getSemanticAnchorTerms() {
+  const primaryKeywords = getPrimaryScoringKeywords().filter((term) => !SEMANTIC_GUARDRAIL_GENERIC_TERMS.has(term));
+  if (primaryKeywords.length > 0) {
+    return primaryKeywords.slice(0, 4);
+  }
+
+  const queryKeywords = tokenizeSearchInput(query).filter(
+    (term) => !SEARCH_STOP_WORDS.has(term) && !SEMANTIC_GUARDRAIL_GENERIC_TERMS.has(term)
+  );
+  if (queryKeywords.length > 0) {
+    return queryKeywords.slice(0, 4);
+  }
+
+  const fallbackTerms = getPrimaryScoringKeywords();
+  return fallbackTerms.slice(0, 2);
+}
+
+function rankLexicalVectorResults(results, scoresByItemId) {
+  const reranked = [...results];
+  reranked.sort((a, b) => {
+    const aVector = Number(scoresByItemId[a.item.id]);
+    const bVector = Number(scoresByItemId[b.item.id]);
+    if (Number.isFinite(aVector) || Number.isFinite(bVector)) {
+      if (Number.isFinite(aVector) && Number.isFinite(bVector) && aVector !== bVector) {
+        return bVector - aVector;
+      }
+      if (Number.isFinite(aVector) && !Number.isFinite(bVector)) {
+        return -1;
+      }
+      if (!Number.isFinite(aVector) && Number.isFinite(bVector)) {
+        return 1;
+      }
+    }
+
+    return b.score - a.score || getItemActivityTimestamp(b.item) - getItemActivityTimestamp(a.item);
+  });
+  return reranked;
 }
 
 function resolveVectorEmbeddingModel(embeddingConfig) {
@@ -1564,6 +1663,18 @@ async function getCandidateEmbeddings(candidates) {
   }
 
   return embeddingById;
+}
+
+function collectSearchCorpusResults(criteria) {
+  return collectSearchResults(
+    {
+      ...criteria,
+      terms: []
+    },
+    {
+      requireTermMatch: false
+    }
+  );
 }
 
 function extractItemEmbedding(item) {
