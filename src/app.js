@@ -1031,12 +1031,13 @@ function buildSearchResults() {
   }
 
   for (const plan of fallbackPlans) {
+    if (plan.semanticOnly) {
+      return finalizeSearchResults([], plan.criteria, plan.label);
+    }
+
     const fallbackResults = collectSearchResults(plan.criteria);
     if (fallbackResults.length > 0) {
       return finalizeSearchResults(fallbackResults, plan.criteria, plan.label);
-    }
-    if (plan.semanticOnly) {
-      return finalizeSearchResults([], plan.criteria, plan.label);
     }
   }
 
