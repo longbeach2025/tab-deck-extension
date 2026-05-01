@@ -1075,6 +1075,7 @@ function createFallbackSearchPlans(baseCriteria) {
   const hasSmartDateFromOnly = !searchFilters.dateFrom && !!smartSearchHints.dateFrom;
   const hasSmartDateToOnly = !searchFilters.dateTo && !!smartSearchHints.dateTo;
   const hasSmartDateOnly = hasSmartDateFromOnly || hasSmartDateToOnly;
+  const allowSmartHostRelaxation = shouldAllowSmartHostRelaxation(baseCriteria);
   const plans = [];
 
   if (!searchConfig.autoRelaxSmartFilters || !query || (!hasSmartHostOnly && !hasSmartDateOnly)) {
@@ -1092,7 +1093,7 @@ function createFallbackSearchPlans(baseCriteria) {
     });
   }
 
-  if (hasSmartHostOnly) {
+  if (hasSmartHostOnly && allowSmartHostRelaxation) {
     plans.push({
       criteria: {
         ...baseCriteria,
@@ -1102,7 +1103,7 @@ function createFallbackSearchPlans(baseCriteria) {
     });
   }
 
-  if (hasSmartDateOnly && hasSmartHostOnly) {
+  if (hasSmartDateOnly && hasSmartHostOnly && allowSmartHostRelaxation) {
     plans.push({
       criteria: {
         ...baseCriteria,
@@ -1115,6 +1116,16 @@ function createFallbackSearchPlans(baseCriteria) {
   }
 
   return plans;
+}
+
+function shouldAllowSmartHostRelaxation(baseCriteria) {
+  const effectiveHost = String(baseCriteria?.host || "").trim();
+  if (!effectiveHost) {
+    return true;
+  }
+
+  const anchorTerms = getSemanticAnchorTerms();
+  return anchorTerms.length === 0;
 }
 
 function collectSearchResults(criteria) {
