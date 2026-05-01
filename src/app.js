@@ -278,11 +278,6 @@ const elements = {
   searchSortSelect: document.querySelector("#searchSortSelect"),
   smartSearchRelaxToggle: document.querySelector("#smartSearchRelaxToggle"),
   llmStrictModeToggle: document.querySelector("#llmStrictModeToggle"),
-  preprocessFastModeToggle: document.querySelector("#preprocessFastModeToggle"),
-  runPreprocessButton: document.querySelector("#runPreprocessButton"),
-  preprocessProgressBar: document.querySelector("#preprocessProgressBar"),
-  preprocessProgressText: document.querySelector("#preprocessProgressText"),
-  preprocessLastFull: document.querySelector("#preprocessLastFull"),
   smartSearchChips: document.querySelector("#smartSearchChips"),
   clearSearchFiltersButton: document.querySelector("#clearSearchFiltersButton"),
   spaceList: document.querySelector("#spaceList"),
@@ -417,8 +412,6 @@ function bindEvents() {
   });
   elements.smartSearchRelaxToggle.addEventListener("change", saveSearchControls);
   elements.llmStrictModeToggle.addEventListener("change", saveSearchControls);
-  elements.preprocessFastModeToggle.addEventListener("change", saveSearchControls);
-  elements.runPreprocessButton.addEventListener("click", () => runSearchEnhancementProcessing({ force: true }));
   elements.clearSearchFiltersButton.addEventListener("click", clearSearchFilters);
 
   elements.addSpaceButton.addEventListener("click", addSpace);
@@ -540,6 +533,8 @@ async function renderCloudControls() {
   elements.cloudUrlInput.value = config.supabaseUrl;
   elements.cloudAnonKeyInput.value = config.anonKey;
   elements.cloudSignedIn.textContent = user ? `Signed in as: ${user.email || user.id}` : "Signed in as: Not signed in";
+  elements.signInCloudButton.disabled = Boolean(user);
+  elements.signUpCloudButton.disabled = Boolean(user);
   elements.signOutCloudButton.disabled = !user;
   elements.syncNowButton.disabled = !user;
   elements.privateInitSection.classList.toggle("hidden", !canUsePrivateInit);
@@ -3932,6 +3927,10 @@ function getSearchEnhancementStats() {
 }
 
 function renderSearchEnhancementProgress() {
+  if (!elements.preprocessProgressBar || !elements.preprocessProgressText || !elements.preprocessLastFull) {
+    return;
+  }
+
   const stats = getSearchEnhancementStats();
   const percent = stats.totalCount > 0 ? Math.round((stats.processedCount / stats.totalCount) * 100) : 0;
   let runtimeSuffix = "";
@@ -4046,7 +4045,9 @@ async function runSearchEnhancementProcessing(options = {}) {
     target: candidates.length,
     processed: 0
   };
-  elements.runPreprocessButton.disabled = true;
+  if (elements.runPreprocessButton) {
+    elements.runPreprocessButton.disabled = true;
+  }
   elements.systemActionStatus.classList.add("loading");
   renderSearchEnhancementProgress();
 
@@ -4125,7 +4126,9 @@ async function runSearchEnhancementProcessing(options = {}) {
   } finally {
     searchEnhancementRunState = null;
     searchEnhancementBusy = false;
-    elements.runPreprocessButton.disabled = false;
+    if (elements.runPreprocessButton) {
+      elements.runPreprocessButton.disabled = false;
+    }
     elements.systemActionStatus.classList.remove("loading");
     renderSearchEnhancementProgress();
   }
@@ -4763,8 +4766,6 @@ async function renderSearchControls() {
   searchConfig = await getSearchConfig();
   elements.smartSearchRelaxToggle.checked = searchConfig.autoRelaxSmartFilters;
   elements.llmStrictModeToggle.checked = searchConfig.llmStrictMode;
-  elements.preprocessFastModeToggle.checked = searchConfig.preprocessFastMode;
-  elements.runPreprocessButton.disabled = searchEnhancementBusy;
   renderSearchEnhancementProgress();
 }
 
@@ -4772,7 +4773,7 @@ async function saveSearchControls() {
   const config = normalizeSearchConfig({
     autoRelaxSmartFilters: elements.smartSearchRelaxToggle.checked,
     llmStrictMode: elements.llmStrictModeToggle.checked,
-    preprocessFastMode: elements.preprocessFastModeToggle.checked
+    preprocessFastMode: searchConfig.preprocessFastMode
   });
 
   await chrome.storage.local.set({
@@ -4788,7 +4789,7 @@ async function saveSearchControls() {
   showCloudMessage(
     `Smart search updated: auto-relax ${config.autoRelaxSmartFilters ? "on" : "off"}, strict LLM mode ${
       config.llmStrictMode ? "on" : "off"
-    }, preprocess mode ${config.preprocessFastMode ? "fast" : "standard"}.`
+    }.`
   );
 }
 

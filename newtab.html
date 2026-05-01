@@ -122,10 +122,6 @@
             <input id="llmStrictModeToggle" type="checkbox">
             <span>Require LLM for NL enhancement</span>
           </label>
-          <label class="check-row">
-            <input id="preprocessFastModeToggle" type="checkbox">
-            <span>Fast preprocess mode (title + keywords only)</span>
-          </label>
           <div class="cloud-fields">
             <p class="cloud-meta">LLM Provider (for natural language parsing)</p>
             <select id="aiProviderSelect" aria-label="LLM provider">
@@ -150,12 +146,6 @@
             <input id="embeddingModelInput" type="text" placeholder="Model (e.g. BAAI/bge-m3)">
           </div>
           <button id="saveAiConfigButton" class="secondary-button">Save LLM + Embedding config</button>
-          <button id="runPreprocessButton" class="secondary-button">Run preprocess batch (200)</button>
-          <div class="preprocess-progress-wrap">
-            <progress id="preprocessProgressBar" max="100" value="0"></progress>
-            <p id="preprocessProgressText" class="cloud-meta">Preprocess progress: 0/0 (0%)</p>
-            <p id="preprocessLastFull" class="cloud-meta">Last full preprocess: Never</p>
-          </div>
         </div>
       </div>
 
