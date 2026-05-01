@@ -57,9 +57,12 @@ const VECTOR_SEARCH_DEBOUNCE_MS = 260;
 const VECTOR_CANDIDATE_LIMIT = 260;
 const VECTOR_TOPK_LIMIT = 80;
 const VECTOR_MIX_WEIGHT = 2;
+const DUAL_RECALL_K = 30;
+const DUAL_COSINE_TIE_THRESHOLD = 0.01;
 const VECTOR_SEARCH_CACHE_LIMIT = 80;
 const VECTOR_EMBEDDING_MODEL_DEFAULT = "text-embedding-3-small";
 const VECTOR_SEARCH_DEBUG = false;
+const SEARCH_STRATEGY = "dual"; // "legacy" | "dual"
 const PRIVATE_INIT_OWNER_SALT = "tabdeck-private-init-v1";
 const PRIVATE_INIT_ALLOWED_USER_HASHES = new Set(["8d28328b26f7628a2028865501ec928ce01e6a3ffbbb9e8e7a83813763318d56"]);
 const SEARCH_ENHANCEMENT_INDEX_KEY = "tabDeckSearchEnhancementIndex";
@@ -1011,6 +1014,10 @@ function renderSearchResults() {
 }
 
 function buildSearchResults() {
+  if (isDualSearchStrategy()) {
+    return buildDualSearchResults();
+  }
+
   const baseCriteria = createSearchCriteria();
   const baseResults = collectSearchResults(baseCriteria);
 
@@ -1049,6 +1056,200 @@ function buildSearchResults() {
     vectorApplied: false,
     vectorPending: false
   };
+}
+
+function isDualSearchStrategy() {
+  return SEARCH_STRATEGY === "dual";
+}
+
+function buildDualSearchResults() {
+  const dualCriteria = createDualSearchCriteria();
+  const corpusResults = collectSearchCorpusResults(dualCriteria);
+  const baseResults = collectDualBm25Results(corpusResults, dualCriteria);
+  const vectorSignature = createVectorSearchSignature(dualCriteria, baseResults);
+  const vectorReranked = applyVectorSearchScores(baseResults, vectorSignature);
+  return {
+    results: vectorReranked.results,
+    fallbackLabel: "",
+    criteria: dualCriteria,
+    vectorSignature,
+    vectorApplied: vectorReranked.applied,
+    vectorPending: vectorReranked.pending
+  };
+}
+
+function createDualSearchCriteria() {
+  const parsed = parseDualSearchQuery(query);
+  const hostFromInput = String(searchFilters.host || "").trim().toLowerCase();
+  const host = parsed.hostFilter || hostFromInput || "";
+  return {
+    host,
+    dateFrom: searchFilters.dateFrom || "",
+    dateTo: searchFilters.dateTo || "",
+    terms: parsed.lexicalTerms,
+    rawQuery: parsed.rawQuery,
+    lexicalTerms: parsed.lexicalTerms,
+    phrases: parsed.phrases,
+    strategy: "dual"
+  };
+}
+
+function parseDualSearchQuery(rawInput) {
+  const rawQuery = String(rawInput || "").trim();
+  let working = rawQuery;
+  let hostFilter = "";
+
+  working = working.replace(/\b(?:host|site):([^\s]+)/gi, (_, hostValue) => {
+    if (!hostFilter) {
+      hostFilter = normalizeDualHostFilter(hostValue);
+    }
+    return " ";
+  });
+
+  const phrases = [];
+  working = working.replace(/"([^"]+)"/g, (_, phraseValue) => {
+    const phrase = String(phraseValue || "").trim();
+    if (phrase) {
+      phrases.push(phrase);
+    }
+    return " ";
+  });
+
+  return {
+    rawQuery,
+    lexicalTerms: tokenizeBm25SearchText(working),
+    phrases,
+    hostFilter
+  };
+}
+
+function normalizeDualHostFilter(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  const withoutProtocol = normalized.replace(/^https?:\/\//, "");
+  const withoutPath = withoutProtocol.split("/")[0] || "";
+  const withoutPort = withoutPath.split(":")[0] || "";
+  return withoutPort.replace(/^www\./, "");
+}
+
+function tokenizeBm25SearchText(value) {
+  const text = String(value || "").toLowerCase();
+  const tokens = [];
+  for (const match of text.matchAll(/[a-z0-9][a-z0-9._-]*|[\u4e00-\u9fff]+/g)) {
+    const part = match[0];
+    if (/^[\u4e00-\u9fff]+$/.test(part)) {
+      tokens.push(part);
+      for (let size = 2; size <= 3; size += 1) {
+        for (let index = 0; index <= part.length - size; index += 1) {
+          tokens.push(part.slice(index, index + size));
+        }
+      }
+    } else {
+      tokens.push(part);
+      for (const split of part.split(/[._-]+/)) {
+        if (split.length >= 2) {
+          tokens.push(split);
+        }
+      }
+    }
+  }
+  return tokens.filter((token) => token && !SEARCH_STOP_WORDS.has(token));
+}
+
+function buildDualDocumentText(entry) {
+  const title = String(entry?.item?.title || "");
+  const url = String(entry?.item?.url || "");
+  const host = getHost(url);
+  const collectionName = String(entry?.collectionName || "");
+  const collectionNotes = String(entry?.collectionNotes || "");
+  const spaceName = String(entry?.spaceName || "");
+  const enhancementTerms = getSearchEnhancementTerms(entry?.item);
+  return [
+    title,
+    title,
+    title,
+    title,
+    host,
+    host,
+    host,
+    url,
+    url,
+    collectionName,
+    collectionName,
+    collectionNotes,
+    spaceName,
+    ...enhancementTerms,
+    ...enhancementTerms
+  ].join(" ");
+}
+
+function scoreDualBm25(tokens, queryTokens, indexState) {
+  if (!tokens.length || !queryTokens.length) {
+    return 0;
+  }
+  const k1 = 1.2;
+  const b = 0.75;
+  const tf = new Map();
+  for (const token of tokens) {
+    tf.set(token, (tf.get(token) || 0) + 1);
+  }
+  let score = 0;
+  for (const token of queryTokens) {
+    const freq = tf.get(token) || 0;
+    if (!freq) {
+      continue;
+    }
+    const docFreq = indexState.docFreq.get(token) || 0;
+    const idf = Math.log(1 + (indexState.totalDocs - docFreq + 0.5) / (docFreq + 0.5));
+    const denom = freq + k1 * (1 - b + b * (tokens.length / Math.max(1, indexState.avgLength)));
+    score += idf * ((freq * (k1 + 1)) / denom);
+  }
+  return score;
+}
+
+function collectDualBm25Results(corpusResults, criteria) {
+  const candidates = Array.isArray(corpusResults) ? corpusResults : [];
+  const lexicalTerms = Array.isArray(criteria?.lexicalTerms) ? criteria.lexicalTerms : [];
+  const phraseTokens = Array.isArray(criteria?.phrases) ? criteria.phrases.flatMap((phrase) => tokenizeBm25SearchText(phrase)) : [];
+  const queryTokens = [...lexicalTerms, ...phraseTokens];
+
+  if (queryTokens.length === 0) {
+    return sortSearchResults([...candidates], false);
+  }
+
+  const docs = candidates.map((entry) => ({ entry, tokens: tokenizeBm25SearchText(buildDualDocumentText(entry)) }));
+  const docFreq = new Map();
+  let totalLength = 0;
+  for (const doc of docs) {
+    totalLength += doc.tokens.length;
+    const unique = new Set(doc.tokens);
+    for (const token of unique) {
+      docFreq.set(token, (docFreq.get(token) || 0) + 1);
+    }
+  }
+
+  const indexState = {
+    docFreq,
+    totalDocs: docs.length,
+    avgLength: docs.length ? totalLength / docs.length : 0
+  };
+
+  return docs
+    .map((doc) => {
+      const score = scoreDualBm25(doc.tokens, queryTokens, indexState);
+      if (score <= 0) {
+        return null;
+      }
+      return {
+        ...doc.entry,
+        score
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || getItemActivityTimestamp(b.item) - getItemActivityTimestamp(a.item))
+    .slice(0, DUAL_RECALL_K);
 }
 
 function finalizeSearchResults(rawResults, criteria, fallbackLabel = "") {
@@ -1163,6 +1364,7 @@ function collectSearchResults(criteria) {
             spaceName: space.name,
             collectionId: collection.id,
             collectionName: collection.name,
+            collectionNotes: collection.notes || "",
             item,
             score: computeSearchScore(space, collection, item, criteria.terms)
           });
@@ -1270,7 +1472,8 @@ function getVectorSearchMetaLabel(searchState) {
   }
 
   if (searchState.vectorApplied) {
-    const strategyLabel = vectorSearchState.strategy === "priority" ? "priority" : "mix";
+    const strategyLabel =
+      vectorSearchState.strategy === "dual" ? "dual" : vectorSearchState.strategy === "priority" ? "priority" : "mix";
     const elapsedLabel = vectorSearchState.elapsedMs ? `, ${vectorSearchState.elapsedMs}ms` : "";
     const semanticLabel = Number.isFinite(vectorSearchState.semanticAddedCount) ? `, +${vectorSearchState.semanticAddedCount} semantic` : "";
     return `Vector recall: ${strategyLabel} Top ${vectorSearchState.topKCount || 0} (${vectorSearchState.appliedCount}/${
@@ -1308,6 +1511,10 @@ function scheduleVectorSearchRerank(searchState) {
 }
 
 async function runVectorSearchRerank(signature, criteria, lexicalResults) {
+  if (isDualSearchStrategy()) {
+    return runDualVectorSearchRerank(signature, criteria, lexicalResults);
+  }
+
   const requestId = ++vectorSearchRequestId;
   const startedAt = Date.now();
   const lexicalCandidates = Array.isArray(lexicalResults) ? lexicalResults : [];
@@ -1492,6 +1699,186 @@ async function runVectorSearchRerank(signature, criteria, lexicalResults) {
         lexicalTop
       });
     }
+    renderSearchResults();
+  }
+}
+
+async function runDualVectorSearchRerank(signature, criteria, lexicalResults) {
+  const requestId = ++vectorSearchRequestId;
+  const startedAt = Date.now();
+  const bm25Candidates = Array.isArray(lexicalResults) ? lexicalResults : [];
+  const corpusCandidates = collectSearchCorpusResults(criteria);
+  if (corpusCandidates.length === 0) {
+    return;
+  }
+
+  vectorSearchState = {
+    signature,
+    status: "running",
+    scoresByItemId: {},
+    rankedItemIds: [],
+    orderedResults: [],
+    strategy: "dual",
+    appliedCount: 0,
+    candidateCount: bm25Candidates.length,
+    totalResultCount: bm25Candidates.length,
+    corpusCount: corpusCandidates.length,
+    topKCount: 0,
+    semanticAddedCount: 0,
+    elapsedMs: 0,
+    model: "",
+    error: ""
+  };
+  renderSearchResults();
+
+  try {
+    const aiConfig = await getAiConfig();
+    const embeddingConfig = aiConfig.embedding || {};
+    if (!embeddingConfig.apiKey || !embeddingConfig.baseUrl) {
+      throw new Error("Embedding config missing.");
+    }
+
+    const embeddingModel = resolveVectorEmbeddingModel(embeddingConfig);
+    const queryText = String(criteria?.rawQuery || query || "").trim();
+    const queryEmbedding = await getQueryEmbeddingVector(queryText, embeddingConfig, embeddingModel);
+    const itemEmbeddings = await getCandidateEmbeddings(corpusCandidates);
+    const corpusByItemId = new Map(corpusCandidates.map((entry) => [entry.item.id, entry]));
+    const scoredCandidates = [];
+
+    for (const candidate of corpusCandidates) {
+      const embedding = itemEmbeddings.get(candidate.item.id);
+      if (!embedding) {
+        continue;
+      }
+      const cosine = cosineSimilarity(queryEmbedding, embedding);
+      if (!Number.isFinite(cosine)) {
+        continue;
+      }
+      scoredCandidates.push({
+        itemId: candidate.item.id,
+        cosine,
+        activityTs: getItemActivityTimestamp(candidate.item)
+      });
+    }
+
+    if (requestId !== vectorSearchRequestId) {
+      return;
+    }
+
+    if (scoredCandidates.length === 0) {
+      vectorSearchState = {
+        signature,
+        status: "failed",
+        scoresByItemId: {},
+        rankedItemIds: [],
+        orderedResults: [],
+        strategy: "dual",
+        appliedCount: 0,
+        candidateCount: bm25Candidates.length,
+        totalResultCount: bm25Candidates.length,
+        corpusCount: corpusCandidates.length,
+        topKCount: 0,
+        semanticAddedCount: 0,
+        elapsedMs: Date.now() - startedAt,
+        model: embeddingModel,
+        error: "no usable embeddings in candidates"
+      };
+      renderSearchResults();
+      return;
+    }
+
+    scoredCandidates.sort((a, b) => b.cosine - a.cosine || b.activityTs - a.activityTs);
+
+    const bm25RankById = new Map(bm25Candidates.slice(0, DUAL_RECALL_K).map((entry, index) => [entry.item.id, index + 1]));
+    const embeddingTop = scoredCandidates.slice(0, DUAL_RECALL_K);
+    const embeddingRankById = new Map(embeddingTop.map((entry, index) => [entry.itemId, index + 1]));
+    const mergedCandidateIds = new Set([...bm25RankById.keys(), ...embeddingRankById.keys()]);
+    const finalScored = [];
+    const scoresByItemId = {};
+
+    for (const itemId of mergedCandidateIds) {
+      const corpusEntry = corpusByItemId.get(itemId);
+      if (!corpusEntry) {
+        continue;
+      }
+      const scored = scoredCandidates.find((entry) => entry.itemId === itemId);
+      if (!scored) {
+        continue;
+      }
+      const sourceCount = (bm25RankById.has(itemId) ? 1 : 0) + (embeddingRankById.has(itemId) ? 1 : 0);
+      const bm25Rank = bm25RankById.get(itemId);
+      const embeddingRank = embeddingRankById.get(itemId);
+      finalScored.push({
+        itemId,
+        corpusEntry,
+        cosine: scored.cosine,
+        sourceCount,
+        bm25Rank: Number.isFinite(bm25Rank) ? bm25Rank : null,
+        embeddingRank: Number.isFinite(embeddingRank) ? embeddingRank : null,
+        activityTs: getItemActivityTimestamp(corpusEntry.item)
+      });
+      scoresByItemId[itemId] = scored.cosine;
+    }
+
+    finalScored.sort((a, b) => {
+      const cosineGap = b.cosine - a.cosine;
+      if (Math.abs(cosineGap) >= DUAL_COSINE_TIE_THRESHOLD) {
+        return cosineGap;
+      }
+      if (b.sourceCount !== a.sourceCount) {
+        return b.sourceCount - a.sourceCount;
+      }
+      const aBm25Rank = Number.isFinite(a.bm25Rank) ? a.bm25Rank : Number.POSITIVE_INFINITY;
+      const bBm25Rank = Number.isFinite(b.bm25Rank) ? b.bm25Rank : Number.POSITIVE_INFINITY;
+      if (aBm25Rank !== bBm25Rank) {
+        return aBm25Rank - bBm25Rank;
+      }
+      return b.activityTs - a.activityTs;
+    });
+
+    const orderedResults = finalScored.map((entry) => entry.corpusEntry);
+    const rankedItemIds = finalScored.map((entry) => entry.itemId);
+    const semanticAddedCount = Math.max(0, orderedResults.length - bm25Candidates.length);
+
+    vectorSearchState = {
+      signature,
+      status: "ready",
+      scoresByItemId,
+      rankedItemIds,
+      orderedResults,
+      strategy: "dual",
+      appliedCount: scoredCandidates.length,
+      candidateCount: bm25Candidates.length,
+      totalResultCount: bm25Candidates.length,
+      corpusCount: corpusCandidates.length,
+      topKCount: embeddingTop.length,
+      semanticAddedCount,
+      elapsedMs: Date.now() - startedAt,
+      model: embeddingModel,
+      error: ""
+    };
+    renderSearchResults();
+  } catch (error) {
+    if (requestId !== vectorSearchRequestId) {
+      return;
+    }
+    vectorSearchState = {
+      signature,
+      status: "failed",
+      scoresByItemId: {},
+      rankedItemIds: [],
+      orderedResults: [],
+      strategy: "dual",
+      appliedCount: 0,
+      candidateCount: bm25Candidates.length,
+      totalResultCount: bm25Candidates.length,
+      corpusCount: corpusCandidates.length,
+      topKCount: 0,
+      semanticAddedCount: 0,
+      elapsedMs: Date.now() - startedAt,
+      model: "",
+      error: formatCloudError(error)
+    };
     renderSearchResults();
   }
 }
