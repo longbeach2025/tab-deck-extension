@@ -6,6 +6,7 @@ const AUTO_SAVE_COLLECTION_MAX_ITEMS = 500;
 const AUTO_SAVE_CONFIG_KEY = "tabDeckAutoSaveConfig";
 const AUTO_SAVE_META_KEY = "tabDeckAutoSaveMeta";
 const AUTO_SAVE_ALLOWED_INTERVALS = [3, 5, 10, 15];
+const AUTO_CAPTURE_LOCKED = true;
 const AUTO_SAVE_DEFAULT_CONFIG = {
   enabled: true,
   intervalMinutes: 3
@@ -71,6 +72,11 @@ async function refreshAutoSaveConfig(reason) {
 async function applyAutoSaveAlarm() {
   await chrome.alarms.clear(AUTO_SAVE_ALARM);
 
+  if (AUTO_CAPTURE_LOCKED) {
+    console.warn("[capture-lock] Auto-save alarm cleared because AUTO_CAPTURE_LOCKED=true.");
+    return;
+  }
+
   if (!autoSaveConfig.enabled) {
     return;
   }
@@ -81,6 +87,12 @@ async function applyAutoSaveAlarm() {
 }
 
 async function captureTabsSilently(reason) {
+  if (AUTO_CAPTURE_LOCKED) {
+    console.warn("[capture-lock] captureTabsSilently skipped because AUTO_CAPTURE_LOCKED=true.", { reason });
+    captureQueued = false;
+    return;
+  }
+
   if (!autoSaveConfig.enabled) {
     return;
   }
