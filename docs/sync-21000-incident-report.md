@@ -14,7 +14,13 @@ message: ON CONFLICT DO UPDATE command cannot affect row a second time
 hint: Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
 ```
 
+Incident severity: **P2**.
+
+This was not P0 because it affected a dev user only and production data remained isolated. It was not a minor P3 bug because it exposed multiple product-stability gaps: local deck corruption was possible, background auto-save could trigger whole-deck save/sync, and `markDeletedRows` did not prevent a 47-link soft-delete even though the delete volume exceeded the configured bulk-delete thresholds.
+
 The direct cause was a polluted local `chrome.storage.local.tabDeckData` deck. The local deck contained duplicate `link.id` values inside `collection.items`; when the deck was pushed, the cloud upsert payload contained the same constrained `id` more than once, causing PostgreSQL/Supabase to reject the statement with `21000`.
+
+The incident was recovered, but the code-level origin of the local corruption is **not yet identified**. The recovery closed the symptom loop: local and cloud data were restored, and manual sync succeeded. It did not close the root-cause loop: we still do not know which code path originally transformed a clean 3320-link local deck into a duplicate/missing shape.
 
 The incident was not caused by Phase 5 search ranking itself. Phase 5 search/UI activity exposed the polluted local deck because UI actions, background capture, and sync paths call whole-deck save/sync functions. The search code was primarily read-only, but the surrounding save/sync system allowed polluted local state to propagate toward cloud sync.
 
@@ -37,6 +43,8 @@ During recovery, two temporary safety locks were introduced:
 
 - `SYNC_LOCKED`: temporarily blocked cloud push while local data was still polluted.
 - `AUTO_CAPTURE_LOCKED`: blocked background auto-save capture and cleared the `tabDeckAutoSave` alarm during recovery.
+
+Important boundary: these locks stabilized recovery, but they did not explain how the local duplicate/missing state was originally created.
 
 After local and cloud recovery, `SYNC_LOCKED` was set back to `false` for manual sync validation. `AUTO_CAPTURE_LOCKED` remains `true` because the auto-save design needs a separate follow-up fix: auto-save must be decoupled from the `saveDeck()` cloud sync path.
 
@@ -314,6 +322,31 @@ Last synced: 2026/5/3 00:30:48
 Pending local changes: No
 ```
 
+## Incident Severity
+
+Severity: **P2**.
+
+Why not P0:
+
+- The incident affected the dev user `chens_dev_2@luex.in` only.
+- Production user `chens@luex.in` was not affected.
+- Phase 1 physical separation between dev/prod prevented production impact.
+
+Why not P3:
+
+- A local deck could silently enter a duplicate/missing shape.
+- A background writer could repeatedly call whole-deck save paths.
+- Cloud soft-deleted 47 links before the upsert failed.
+- The configured bulk-delete guard did not stop that soft delete.
+- The exact code-level corruption path remains unknown.
+
+P2 handling standard for this incident:
+
+- Incident report required: completed in this document.
+- Data recovery required: completed for local and cloud.
+- Defensive code required: still pending.
+- Auto-save design review required: still pending.
+
 ## Technical Evidence
 
 ### Local duplicate shape
@@ -390,9 +423,40 @@ The order matters:
 
 This is why Supabase raised `21000`.
 
+This is also where a future defensive fix should be added: before cloud push, the flattened payload should assert that link IDs are unique. If duplicates are found, the push should either abort with a clear diagnostic or dedupe with explicit caller-stack logging, depending on the chosen policy.
+
 ### `normalizeDeck` preserved duplicates
 
 `normalizeDeck` filtered invalid items and normalized fields, but did not dedupe `collection.items` by link ID. Therefore duplicate local items survived normalization.
+
+### `markDeletedRows` bulk-delete guard did not prevent this incident
+
+This is a separate safety gap.
+
+The sync layer has bulk-delete thresholds:
+
+```js
+BULK_DELETE_LINKS_ABS_THRESHOLD = 5
+BULK_DELETE_LINKS_RATIO_THRESHOLD = 0.01
+```
+
+The incident soft-deleted 47 links. Against an approximately 3273-link active set, that is about 1.44%.
+
+```text
+47 > 5
+47 / 3273 = 0.0144 > 0.01
+```
+
+By the intended safety model, this should have been treated as a suspicious bulk delete. It was not blocked.
+
+Open explanations:
+
+- The threshold check has a bug.
+- The threshold check was bypassed by `trustLevel`.
+- The sync context supplied by the triggering path was considered trusted.
+- The guard only applies to some delete paths, not this one.
+
+This must be investigated separately. The data recovery is complete, but the bulk-delete guard cannot yet be trusted as a sufficient protection layer.
 
 ### `mergeItems` was not the likely source
 
@@ -476,6 +540,31 @@ Minimum future design constraints:
 - Auto-save should run invariant checks before writing local deck.
 - If local deck has duplicate link IDs, auto-save should abort and surface a diagnostic.
 - Manual `Sync now` should be the controlled cloud boundary during recovery/diagnostic states.
+
+## Defensive Fix Tradeoff
+
+A follow-up defensive fix is required, but it has an important tradeoff.
+
+Likely defensive measures:
+
+- Add duplicate-id detection in `flattenDeck` before payload construction or before cloud push.
+- Add a second duplicate-id check inside `safeUpsertLinks`.
+- Include caller-stack logging when duplicates are detected.
+- Add stricter handling in `markDeletedRows` when delete volume exceeds absolute/ratio thresholds.
+
+Benefit:
+
+- The same local corruption shape should no longer be able to damage cloud state.
+- A duplicate payload should be stopped before Supabase raises `21000`.
+- Caller-stack logging may identify the write path that attempted to push polluted data.
+
+Cost:
+
+- Defensive dedupe can make the product stable before the original corruption path is found.
+- If the original bug is rare, the call stack may not be captured for a long time.
+- If the original path changes before it reproduces, the exact root cause may remain permanently unknown.
+
+This is an acceptable engineering tradeoff for stability, but it must be recorded honestly: defensive fixes reduce blast radius; they do not automatically close the root-cause investigation.
 
 ## Recovery Artifacts
 
@@ -564,9 +653,40 @@ Candidate areas for later investigation:
 
 These questions do not block the completed recovery, but they must be addressed before re-enabling auto-save.
 
+## What We Learned
+
+1. Local and cloud baselines are required before major sync/search work.
+
+   Without a saved local deck snapshot from before Phase 5 hand testing, root-cause analysis was partially blind. The clean init bundle and cloud backups helped, but they did not show when the MacBook local deck first became polluted.
+
+2. Recovery locks must cover both cloud push and local background writers.
+
+   `SYNC_LOCKED` alone stopped cloud push, but it did not stop local state drift. The `tabDeckAutoSave` alarm and boot capture had to be locked separately.
+
+3. Protection assumptions must be verified, not remembered.
+
+   We assumed some Phase 1 safety mechanisms still protected sync. In practice, `SYNC_LOCKED` had been removed before this incident, and the bulk-delete threshold did not stop a 47-link soft delete.
+
+4. Whole-deck save paths are dangerous for background automation.
+
+   Background auto-save should not have the same authority as deliberate user edits or explicit sync actions.
+
+5. Defensive checks and caller-stack logs are necessary but not sufficient.
+
+   They are the right next step for stability, but they may not reveal the original corruption path if the bug does not reproduce.
+
+6. Treat Recovery Complete and Root Cause Closed as separate statuses.
+
+   This incident is recovered. It is not root-cause closed.
+
 ## Follow-up Required
 
 Do not re-enable `AUTO_CAPTURE_LOCKED=false` until auto-save is redesigned.
+
+Do not treat this incident as root-cause closed until both of these are addressed:
+
+- The `markDeletedRows` threshold bypass/gap is explained.
+- A defensive duplicate-id guard with caller-stack logging is added around cloud push.
 
 Separate design fix required:
 
