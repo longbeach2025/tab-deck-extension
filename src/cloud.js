@@ -29,6 +29,7 @@ const SYNC_TRUST_LEVEL = {
 };
 const BULK_DELETE_LINKS_ABS_THRESHOLD = 5;
 const BULK_DELETE_LINKS_RATIO_THRESHOLD = 0.01;
+const SYNC_LOCKED = true;
 
 let client;
 let clientSignature = "";
@@ -382,6 +383,15 @@ export async function fetchCloudDeck() {
 export async function pushDeckToCloud(deck, syncContext = {}) {
   const trustLevel = normalizeTrustLevel(syncContext?.trustLevel);
   console.log("[sync-context] pushDeckToCloud", { trustLevel, source: syncContext?.source || "unknown" });
+
+  if (SYNC_LOCKED) {
+    console.warn("[sync-lock] pushDeckToCloud skipped because SYNC_LOCKED=true", {
+      source: syncContext?.source || "unknown",
+      trustLevel
+    });
+    return;
+  }
+
   const supabase = await getRequiredClient();
   const user = await getRequiredUser();
   const now = new Date().toISOString();
