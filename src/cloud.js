@@ -29,7 +29,7 @@ const SYNC_TRUST_LEVEL = {
 };
 const BULK_DELETE_LINKS_ABS_THRESHOLD = 5;
 const BULK_DELETE_LINKS_RATIO_THRESHOLD = 0.01;
-const SYNC_LOCKED = true;
+const SYNC_LOCKED = false;
 
 let client;
 let clientSignature = "";
