@@ -676,10 +676,17 @@ function flattenDeck(deck, userId, timestamp) {
 async function markDeletedRows(supabase, userId, payload, timestamp, syncContext = {}) {
   const trustLevel = normalizeTrustLevel(syncContext?.trustLevel);
   const source = syncContext?.source || "unknown";
+  const linkDuplicateSummary = summarizeDuplicateIds(payload?.links);
 
   if (trustLevel !== SYNC_TRUST_LEVEL.trusted) {
     console.error(`[sync-safety] Skipping markDeletedRows: trustLevel=${trustLevel} source=${source}`);
     return;
+  }
+
+  if (linkDuplicateSummary.duplicateExtraCount > 0) {
+    throw new Error(
+      `[sync-safety] Refusing cloud sync: payload has duplicate link ids. source=${source} duplicates=${linkDuplicateSummary.duplicateGroupCount} extra=${linkDuplicateSummary.duplicateExtraCount} sample=${linkDuplicateSummary.sampleIds.join(",")}`
+    );
   }
 
   const [remoteSpaces, remoteCollections, remoteLinks] = await Promise.all([
@@ -691,37 +698,24 @@ async function markDeletedRows(supabase, userId, payload, timestamp, syncContext
   ]);
   const cloudActiveLinks = remoteLinks.length;
   const localActiveLinks = Array.isArray(payload?.links) ? payload.links.length : 0;
-  const diff = cloudActiveLinks - localActiveLinks;
-  const ratio = cloudActiveLinks > 0 ? diff / cloudActiveLinks : 0;
+  const linkDeleteIds = getDeletedIds(remoteLinks, payload.links);
+  const linkDeleteCount = linkDeleteIds.length;
+  const linkDeleteRatio = cloudActiveLinks > 0 ? linkDeleteCount / cloudActiveLinks : 0;
 
-  if (diff > BULK_DELETE_LINKS_ABS_THRESHOLD && ratio > BULK_DELETE_LINKS_RATIO_THRESHOLD) {
-    const cloudIds = new Set(remoteLinks.map((row) => row.id));
-    const localIds = new Set((Array.isArray(payload?.links) ? payload.links : []).map((row) => row.id));
-    const wouldDelete = [];
-    for (const id of cloudIds) {
-      if (!localIds.has(id)) {
-        wouldDelete.push(id);
-        if (wouldDelete.length >= 10) {
-          break;
-        }
-      }
-    }
-
-    console.error(
-      `[sync-safety] Suspicious bulk delete blocked: cloud=${cloudActiveLinks} local=${localActiveLinks} diff=${diff} ratio=${ratio.toFixed(
-        4
-      )} source=${source}`
+  if (linkDeleteCount > BULK_DELETE_LINKS_ABS_THRESHOLD && linkDeleteRatio > BULK_DELETE_LINKS_RATIO_THRESHOLD) {
+    throw new Error(
+      `[sync-safety] Suspicious bulk link delete blocked: cloud=${cloudActiveLinks} local=${localActiveLinks} localUnique=${countUniqueIds(
+        payload.links
+      )} deleteCount=${linkDeleteCount} ratio=${linkDeleteRatio.toFixed(4)} source=${source} sample=${linkDeleteIds
+        .slice(0, 10)
+        .join(",")}`
     );
-    if (wouldDelete.length > 0) {
-      console.error(`[sync-safety] sample wouldDelete ids: ${wouldDelete.join(", ")}`);
-    }
-    return;
   }
 
   const deletes = [
-    markDeletedForTable(supabase, TABLES.links, userId, remoteLinks, payload.links, timestamp),
-    markDeletedForTable(supabase, TABLES.collections, userId, remoteCollections, payload.collections, timestamp),
-    markDeletedForTable(supabase, TABLES.spaces, userId, remoteSpaces, payload.spaces, timestamp)
+    markDeletedIdsForTable(supabase, TABLES.links, userId, linkDeleteIds, timestamp),
+    markDeletedIdsForTable(supabase, TABLES.collections, userId, getDeletedIds(remoteCollections, payload.collections), timestamp),
+    markDeletedIdsForTable(supabase, TABLES.spaces, userId, getDeletedIds(remoteSpaces, payload.spaces), timestamp)
   ];
 
   await Promise.all(deletes);
@@ -752,10 +746,34 @@ async function fetchAllRows(buildQuery) {
   return rows;
 }
 
-async function markDeletedForTable(supabase, table, userId, remoteRows, localRows, timestamp) {
-  const localIds = new Set(localRows.map((row) => row.id));
-  const deletedIds = remoteRows.map((row) => row.id).filter((id) => !localIds.has(id));
+function getDeletedIds(remoteRows, localRows) {
+  const localIds = new Set((Array.isArray(localRows) ? localRows : []).map((row) => row.id));
+  return (Array.isArray(remoteRows) ? remoteRows : []).map((row) => row.id).filter((id) => !localIds.has(id));
+}
 
+function summarizeDuplicateIds(rows) {
+  const counts = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = String(row?.id || "").trim();
+    if (!id) {
+      continue;
+    }
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+
+  const duplicates = [...counts.entries()].filter(([, count]) => count > 1);
+  return {
+    duplicateGroupCount: duplicates.length,
+    duplicateExtraCount: duplicates.reduce((sum, [, count]) => sum + count - 1, 0),
+    sampleIds: duplicates.slice(0, 10).map(([id]) => id)
+  };
+}
+
+function countUniqueIds(rows) {
+  return new Set((Array.isArray(rows) ? rows : []).map((row) => String(row?.id || "").trim()).filter(Boolean)).size;
+}
+
+async function markDeletedIdsForTable(supabase, table, userId, deletedIds, timestamp) {
   if (deletedIds.length === 0) {
     return;
   }
@@ -774,6 +792,13 @@ async function markDeletedForTable(supabase, table, userId, remoteRows, localRow
 async function safeUpsertLinks(supabase, userId, linkRows) {
   if (!Array.isArray(linkRows) || linkRows.length === 0) {
     return;
+  }
+
+  const duplicateSummary = summarizeDuplicateIds(linkRows);
+  if (duplicateSummary.duplicateExtraCount > 0) {
+    throw new Error(
+      `[sync-safety] Refusing link upsert: duplicate link ids in payload. duplicates=${duplicateSummary.duplicateGroupCount} extra=${duplicateSummary.duplicateExtraCount} sample=${duplicateSummary.sampleIds.join(",")}`
+    );
   }
 
   const existingById = await fetchExistingLinkMetadataByIds(supabase, userId, linkRows.map((row) => row.id));
