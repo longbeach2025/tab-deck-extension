@@ -8,8 +8,15 @@ import {
   getStorageStatus,
   isSaveableUrl,
   isDeckStorageChange,
+  isLocalOnlySaveMetaChange,
+  isSessionBufferChange,
+  clearSessionBuffer,
   loadDeck,
+  loadLocalDeck,
+  loadSessionBuffer,
   makeId,
+  markLocalPending,
+  removeSessionBufferUrls,
   serializeDeck,
   syncDeckWithCloud,
   saveDeck,
@@ -32,6 +39,8 @@ import {
 let deck;
 let liveTabs = [];
 let selectedTabIds = new Set();
+let sessionBuffer = null;
+let selectedSessionUrls = new Set();
 let query = "";
 let smartSearchHints = createEmptySmartSearchHints();
 let smartSearchOverrides = createEmptySmartSearchOverrides();
@@ -60,9 +69,20 @@ const VECTOR_MIX_WEIGHT = 2;
 const DUAL_RECALL_K = 30;
 const DUAL_COSINE_TIE_THRESHOLD = 0.01;
 const VECTOR_SEARCH_CACHE_LIMIT = 80;
+const VECTOR_ITEM_EMBEDDING_CACHE_LIMIT = 6000;
 const VECTOR_EMBEDDING_MODEL_DEFAULT = "text-embedding-3-small";
 const VECTOR_SEARCH_DEBUG = false;
 const SEARCH_STRATEGY = "dual"; // "legacy" | "dual"
+const UI_BUILD_LABEL = "2026-05-07-auth-diagnostics";
+let signInClickBound = false;
+
+window.addEventListener("error", (event) => {
+  showCloudMessage(`UI error: ${extractErrorMessage(event.error || event.message)}`, true);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  showCloudMessage(`UI async error: ${extractErrorMessage(event.reason)}`, true);
+});
 const PRIVATE_INIT_OWNER_SALT = "tabdeck-private-init-v1";
 const PRIVATE_INIT_ALLOWED_USER_HASHES = new Set(["8d28328b26f7628a2028865501ec928ce01e6a3ffbbb9e8e7a83813763318d56"]);
 const SEARCH_ENHANCEMENT_INDEX_KEY = "tabDeckSearchEnhancementIndex";
@@ -286,6 +306,10 @@ const elements = {
   autoSaveEnabledToggle: document.querySelector("#autoSaveEnabledToggle"),
   autoSaveIntervalSelect: document.querySelector("#autoSaveIntervalSelect"),
   autoSaveLastCaptured: document.querySelector("#autoSaveLastCaptured"),
+  sessionBufferList: document.querySelector("#sessionBufferList"),
+  saveSelectedBufferButton: document.querySelector("#saveSelectedBufferButton"),
+  saveAllBufferButton: document.querySelector("#saveAllBufferButton"),
+  clearSessionBufferButton: document.querySelector("#clearSessionBufferButton"),
   selectAllTabs: document.querySelector("#selectAllTabs"),
   saveSelectedButton: document.querySelector("#saveSelectedButton"),
   saveAllButton: document.querySelector("#saveAllButton"),
@@ -317,6 +341,8 @@ async function init() {
 
   deck = await loadDeck();
   await refreshLiveTabs();
+  await refreshSessionBuffer();
+  bindCriticalCloudEvents();
   bindEvents();
   bindStorageSyncEvents();
   render();
@@ -327,6 +353,7 @@ async function init() {
   await loadSearchEnhancementIndex();
   await loadSearchEnhancementMeta();
   renderSearchEnhancementProgress();
+  showCloudMessage(`Ready. Build ${UI_BUILD_LABEL}.`);
 }
 
 function showMachineBindingGate(error) {
@@ -418,6 +445,9 @@ function bindEvents() {
   elements.refreshTabsButton.addEventListener("click", refreshAndRenderLiveTabs);
   elements.autoSaveEnabledToggle.addEventListener("change", saveAutoSaveControls);
   elements.autoSaveIntervalSelect.addEventListener("change", saveAutoSaveControls);
+  elements.saveSelectedBufferButton.addEventListener("click", saveSelectedSessionBufferTabs);
+  elements.saveAllBufferButton.addEventListener("click", saveAllSessionBufferTabs);
+  elements.clearSessionBufferButton.addEventListener("click", clearSessionBufferFlow);
   elements.clearDeletedButton.addEventListener("click", clearRecentlyDeleted);
   elements.selectAllTabs.addEventListener("change", toggleAllCurrentTabs);
   elements.saveSelectedButton.addEventListener("click", saveSelectedTabs);
@@ -427,7 +457,7 @@ function bindEvents() {
   elements.renameSpaceButton.addEventListener("click", renameActiveSpace);
   elements.deleteSpaceButton.addEventListener("click", deleteActiveSpace);
   elements.saveCloudConfigButton.addEventListener("click", saveCloudSettings);
-  elements.signInCloudButton.addEventListener("click", signInToCloud);
+  bindCriticalCloudEvents();
   elements.signUpCloudButton.addEventListener("click", signUpForCloud);
   elements.signOutCloudButton.addEventListener("click", signOutOfCloud);
   elements.syncNowButton.addEventListener("click", syncNow);
@@ -441,6 +471,19 @@ function bindEvents() {
   elements.saveAiConfigButton.addEventListener("click", saveAiConfig);
 }
 
+function bindCriticalCloudEvents() {
+  if (signInClickBound || !elements.signInCloudButton) {
+    return;
+  }
+
+  signInClickBound = true;
+  elements.signInCloudButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    showCloudMessage(`Sign-in clicked. Build ${UI_BUILD_LABEL}.`);
+    void signInToCloud();
+  });
+}
+
 function bindStorageSyncEvents() {
   chrome.storage.onChanged.addListener(async (changes, areaName) => {
     if (isDeckStorageChange(areaName, changes)) {
@@ -448,8 +491,20 @@ function bindStorageSyncEvents() {
       render();
     }
 
+    if (isLocalOnlySaveMetaChange(areaName, changes)) {
+      deck = (await loadLocalDeck({ createIfMissing: false })) || deck;
+      const source = changes.tabDeckLocalOnlySaveMeta?.newValue?.source || "local-only";
+      markLocalPending(source);
+      render();
+    }
+
     if (areaName === "local" && (changes[AUTO_SAVE_CONFIG_KEY] || changes[AUTO_SAVE_META_KEY])) {
       await renderAutoSaveControls();
+    }
+
+    if (isSessionBufferChange(areaName, changes)) {
+      await refreshSessionBuffer();
+      renderSessionBuffer();
     }
 
     if (areaName === "local" && changes[SEARCH_CONFIG_KEY]) {
@@ -489,6 +544,12 @@ async function refreshAndRenderLiveTabs() {
   renderLiveTabs();
 }
 
+async function refreshSessionBuffer() {
+  sessionBuffer = await loadSessionBuffer();
+  const availableUrls = new Set(sessionBuffer.recent.map((entry) => entry.url));
+  selectedSessionUrls = new Set(Array.from(selectedSessionUrls).filter((url) => availableUrls.has(url)));
+}
+
 function toggleAllCurrentTabs() {
   if (elements.selectAllTabs.checked) {
     selectedTabIds = new Set(liveTabs.map((tab) => tab.id));
@@ -506,6 +567,7 @@ function render() {
   renderSpaces();
   renderHeader();
   renderLiveTabs();
+  renderSessionBuffer();
   renderRecentlyDeleted();
   renderSearchResults();
   renderCollections();
@@ -528,11 +590,21 @@ function renderStats() {
 
 async function renderCloudControls() {
   const config = await getCloudConfig();
-  const user = await getCloudUser().catch(() => null);
+  let user = null;
+  let authStatusError = "";
+  try {
+    user = await getCloudUser();
+  } catch (error) {
+    authStatusError = formatCloudError(error);
+  }
   const canUsePrivateInit = await isPrivateInitAllowedUser(user);
   elements.cloudUrlInput.value = config.supabaseUrl;
   elements.cloudAnonKeyInput.value = config.anonKey;
-  elements.cloudSignedIn.textContent = user ? `Signed in as: ${user.email || user.id}` : "Signed in as: Not signed in";
+  elements.cloudSignedIn.textContent = authStatusError
+    ? `Signed-in check failed: ${authStatusError}`
+    : user
+      ? `Signed in as: ${user.email || user.id}`
+      : "Signed in as: Not signed in";
   elements.signInCloudButton.disabled = Boolean(user);
   elements.signUpCloudButton.disabled = Boolean(user);
   elements.signOutCloudButton.disabled = !user;
@@ -748,6 +820,87 @@ function updateSelectAllTabs() {
   elements.selectAllTabs.disabled = selectableCount === 0;
   elements.selectAllTabs.checked = selectableCount > 0 && selectedCount === selectableCount;
   elements.selectAllTabs.indeterminate = selectedCount > 0 && selectedCount < selectableCount;
+}
+
+function renderSessionBuffer() {
+  if (!elements.sessionBufferList) {
+    return;
+  }
+
+  elements.sessionBufferList.replaceChildren();
+  const entries = Array.isArray(sessionBuffer?.recent) ? sessionBuffer.recent.slice(0, 20) : [];
+  const selectedCount = entries.filter((entry) => selectedSessionUrls.has(entry.url)).length;
+
+  elements.saveSelectedBufferButton.disabled = selectedCount === 0;
+  elements.saveAllBufferButton.disabled = entries.length === 0;
+  elements.clearSessionBufferButton.disabled = entries.length === 0;
+
+  if (entries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No recent captures.";
+    elements.sessionBufferList.append(empty);
+    return;
+  }
+
+  for (const entry of entries) {
+    const row = document.createElement("label");
+    row.className = "live-tab";
+
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = selectedSessionUrls.has(entry.url);
+    check.addEventListener("change", () => {
+      if (check.checked) {
+        selectedSessionUrls.add(entry.url);
+      } else {
+        selectedSessionUrls.delete(entry.url);
+      }
+      renderSessionBuffer();
+    });
+
+    const icon = document.createElement("img");
+    icon.className = "favicon";
+    icon.alt = "";
+    icon.src = entry.favIconUrl || "";
+    icon.addEventListener("error", () => icon.removeAttribute("src"));
+
+    const textWrap = document.createElement("span");
+    textWrap.className = "tab-text";
+
+    const title = document.createElement("span");
+    title.className = "tab-title";
+    title.textContent = entry.title || entry.url;
+
+    const host = document.createElement("span");
+    host.className = "tab-host";
+    host.textContent = `${getHost(entry.url)} · ${formatRelativeCaptureTime(entry.lastSeenAt)}`;
+
+    textWrap.append(title, host);
+    row.append(check, icon, textWrap);
+    elements.sessionBufferList.append(row);
+  }
+}
+
+function formatRelativeCaptureTime(value) {
+  const parsed = Date.parse(value || "");
+  if (!Number.isFinite(parsed)) {
+    return "recent";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - parsed) / 1000));
+  if (elapsedSeconds < 60) {
+    return "just now";
+  }
+  const elapsedMinutes = Math.round(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m ago`;
+  }
+  const elapsedHours = Math.round(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `${elapsedHours}h ago`;
+  }
+  return new Date(parsed).toLocaleDateString();
 }
 
 function renderCollections() {
@@ -1683,14 +1836,14 @@ async function runVectorSearchRerank(signature, criteria, lexicalResults) {
       semanticAddedCount: 0,
       elapsedMs: Date.now() - startedAt,
       model: "",
-      error: formatCloudError(error)
+      error: formatProviderError(error, "Embedding")
     };
     if (VECTOR_SEARCH_DEBUG) {
       console.warn("[vector-search] rerank-failed", {
         query,
         signature,
         elapsedMs: Date.now() - startedAt,
-        error: formatCloudError(error),
+        error: formatProviderError(error, "Embedding"),
         lexicalTop
       });
     }
@@ -1872,7 +2025,7 @@ async function runDualVectorSearchRerank(signature, criteria, lexicalResults) {
       semanticAddedCount: 0,
       elapsedMs: Date.now() - startedAt,
       model: "",
-      error: formatCloudError(error)
+      error: formatProviderError(error, "Embedding")
     };
     renderSearchResults();
   }
@@ -1993,27 +2146,38 @@ async function getQueryEmbeddingVector(queryText, embeddingConfig, model) {
     return cached;
   }
 
-  const response = await fetch(`${embeddingConfig.baseUrl}/embeddings`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${embeddingConfig.apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      input: [queryText]
-    })
-  });
+  const endpoint = `${embeddingConfig.baseUrl}/embeddings`;
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${embeddingConfig.apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        input: [queryText]
+      })
+    });
+  } catch (error) {
+    throw new ProviderRequestError("Embedding", embeddingConfig, endpoint, { cause: error });
+  }
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+    throw new ProviderRequestError("Embedding", embeddingConfig, endpoint, {
+      status: response.status,
+      responseText: text
+    });
   }
 
   const payload = await response.json();
   const embedding = payload?.data?.[0]?.embedding;
   if (!Array.isArray(embedding) || embedding.length === 0) {
-    throw new Error("Embedding API returned empty vector.");
+    throw new ProviderRequestError("Embedding", embeddingConfig, endpoint, {
+      responseText: "Embedding API returned empty vector."
+    });
   }
 
   vectorQueryEmbeddingCache.set(cacheKey, embedding);
@@ -2104,11 +2268,12 @@ function extractItemEmbedding(item) {
 
 function rememberVectorItemEmbedding(itemId, embedding) {
   vectorItemEmbeddingCache.set(itemId, embedding);
-  if (vectorItemEmbeddingCache.size > 400) {
+  while (vectorItemEmbeddingCache.size > VECTOR_ITEM_EMBEDDING_CACHE_LIMIT) {
     const oldest = vectorItemEmbeddingCache.keys().next().value;
-    if (oldest) {
-      vectorItemEmbeddingCache.delete(oldest);
+    if (!oldest) {
+      break;
     }
+    vectorItemEmbeddingCache.delete(oldest);
   }
 }
 
@@ -2209,12 +2374,12 @@ function renderCollectionCard(space, collection, visibleItems) {
 
     const badge = document.createElement("span");
     badge.className = "collection-badge";
-    badge.textContent = "AUTO";
+    badge.textContent = "DEFAULT";
     top.insertBefore(badge, actions);
 
     const meta = document.createElement("p");
     meta.className = "collection-system-meta";
-    meta.textContent = `Background capture · Last update ${formatDateTimeLabel(collection.updatedAt)}`;
+    meta.textContent = `Recent captures target · Last update ${formatDateTimeLabel(collection.updatedAt)}`;
     card.insertBefore(meta, notesInput);
   }
 
@@ -3361,6 +3526,39 @@ async function saveAllTabs() {
   await saveTabsFlow(liveTabs);
 }
 
+async function saveSelectedSessionBufferTabs() {
+  const entries = getSelectedSessionBufferEntries();
+  await saveSessionBufferTabsFlow(entries);
+}
+
+async function saveAllSessionBufferTabs() {
+  const entries = Array.isArray(sessionBuffer?.recent) ? sessionBuffer.recent : [];
+  await saveSessionBufferTabsFlow(entries);
+}
+
+function getSelectedSessionBufferEntries() {
+  const entries = Array.isArray(sessionBuffer?.recent) ? sessionBuffer.recent : [];
+  return entries.filter((entry) => selectedSessionUrls.has(entry.url));
+}
+
+async function clearSessionBufferFlow() {
+  const entries = Array.isArray(sessionBuffer?.recent) ? sessionBuffer.recent : [];
+  if (entries.length === 0) {
+    return;
+  }
+
+  const confirmed = confirm("Clear recent captures? Formal collections will not be changed.");
+  if (!confirmed) {
+    return;
+  }
+
+  sessionBuffer = await clearSessionBuffer();
+  selectedSessionUrls.clear();
+  renderSessionBuffer();
+  await renderAutoSaveControls();
+  showCloudMessage("Recent captures cleared.");
+}
+
 async function saveTabsFlow(tabs) {
   if (tabs.length === 0) {
     return;
@@ -3382,6 +3580,41 @@ async function saveTabsFlow(tabs) {
   showCloudMessage(`Saved ${savedCount} tabs to "${collection.name}". ${status.message}`, !status.synced);
 }
 
+async function saveSessionBufferTabsFlow(tabs) {
+  if (tabs.length === 0) {
+    return;
+  }
+
+  const collection = getOrCreateAutoSavedCollection();
+  clearSearch();
+  const savedCount = await addTabsToCollection(tabs, collection, { closeAfterSave: false });
+  await removeSessionBufferUrls(tabs.map((tab) => tab.url));
+  selectedSessionUrls.clear();
+  await refreshSessionBuffer();
+  renderSessionBuffer();
+  const status = getStorageStatus();
+  showCloudMessage(`Saved ${savedCount} recent captures to "${collection.name}". ${status.message}`, !status.synced);
+}
+
+function getOrCreateAutoSavedCollection() {
+  const activeSpace = getActiveSpace(deck);
+  let collection = activeSpace.collections.find((candidate) => isAutoSavedCollection(candidate));
+
+  if (!collection) {
+    collection = createCollection(AUTO_SAVE_COLLECTION_NAME);
+    activeSpace.collections.unshift(collection);
+    return collection;
+  }
+
+  const index = activeSpace.collections.indexOf(collection);
+  if (index > 0) {
+    activeSpace.collections.splice(index, 1);
+    activeSpace.collections.unshift(collection);
+  }
+
+  return collection;
+}
+
 async function addTabsToCollection(tabs, collection, options = {}) {
   const existingUrls = new Set(collection.items.map((item) => item.url));
   const items = tabs
@@ -3392,8 +3625,9 @@ async function addTabsToCollection(tabs, collection, options = {}) {
   touchCollectionModified(collection);
   await persistAndRender();
 
-  if (options.closeAfterSave && tabs.length > 0) {
-    await chrome.tabs.remove(tabs.map((tab) => tab.id));
+  const closeableTabIds = tabs.map((tab) => tab.id).filter((id) => Number.isFinite(id));
+  if (options.closeAfterSave && closeableTabIds.length > 0) {
+    await chrome.tabs.remove(closeableTabIds);
     await refreshAndRenderLiveTabs();
   }
 
@@ -3615,8 +3849,8 @@ async function refreshSmartSearchHintsWithLlm(input) {
     }
     showCloudMessage(
       searchConfig.llmStrictMode
-        ? `LLM parse failed. NL enhancement paused (strict mode): ${formatCloudError(error)}`
-        : `LLM parse failed, fallback active: ${formatCloudError(error)}`,
+        ? `LLM parse failed. NL enhancement paused (strict mode): ${formatProviderError(error, "LLM")}`
+        : `LLM parse failed, fallback active: ${formatProviderError(error, "LLM")}`,
       true
     );
   }
@@ -3755,35 +3989,102 @@ function createNeutralSmartSearchHints(rawInput) {
 }
 
 async function requestLlmJson(aiConfig, systemPrompt, userPrompt) {
-  const response = await fetch(`${aiConfig.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    body: JSON.stringify({
-      model: aiConfig.model,
-      temperature: 0.1,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ]
-    })
-  });
+  const endpoint = `${aiConfig.baseUrl}/chat/completions`;
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${aiConfig.apiKey}`
+      },
+      body: JSON.stringify({
+        model: aiConfig.model,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ]
+      })
+    });
+  } catch (error) {
+    throw new ProviderRequestError("LLM", aiConfig, endpoint, { cause: error });
+  }
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+    throw new ProviderRequestError("LLM", aiConfig, endpoint, {
+      status: response.status,
+      responseText: text
+    });
   }
 
   const data = await response.json();
   const content = extractLlmContent(data?.choices?.[0]?.message?.content);
 
   if (!content || typeof content !== "string") {
-    throw new Error("LLM returned empty content.");
+    throw new ProviderRequestError("LLM", aiConfig, endpoint, {
+      responseText: "LLM returned empty content."
+    });
   }
 
   return parseLlmJson(content);
+}
+
+class ProviderRequestError extends Error {
+  constructor(kind, config, endpoint, options = {}) {
+    const provider = String(config?.provider || "custom").trim() || "custom";
+    const baseUrl = String(config?.baseUrl || "").trim();
+    const model = String(config?.model || "").trim();
+    const status = Number.isFinite(options.status) ? options.status : 0;
+    const causeMessage = extractErrorMessage(options.cause);
+    const responseText = String(options.responseText || "").trim();
+    const detail = status ? `HTTP ${status}` : causeMessage || responseText || "request failed";
+    super(`${kind} provider request failed: ${detail}`);
+    this.name = "ProviderRequestError";
+    this.kind = kind;
+    this.provider = provider;
+    this.baseUrl = baseUrl;
+    this.model = model;
+    this.endpoint = endpoint;
+    this.status = status;
+    this.causeMessage = causeMessage;
+    this.responseText = responseText;
+  }
+}
+
+function formatProviderError(error, fallbackKind = "Provider") {
+  if (error?.name === "ProviderRequestError") {
+    const parts = [
+      `${error.kind || fallbackKind} provider failed`,
+      `provider=${error.provider || "custom"}`,
+      `base=${error.baseUrl || "missing"}`,
+      `model=${error.model || "missing"}`
+    ];
+    if (error.status) {
+      parts.push(`status=${error.status}`);
+    }
+    const detail = error.responseText || error.causeMessage;
+    if (detail) {
+      parts.push(`detail=${detail.slice(0, 180)}`);
+    }
+    return parts.join("; ");
+  }
+
+  return `${fallbackKind} provider failed: ${extractErrorMessage(error)}`;
+}
+
+function extractErrorMessage(error) {
+  if (!error) {
+    return "";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
 }
 
 function extractLlmContent(rawContent) {
@@ -4122,7 +4423,7 @@ async function runSearchEnhancementProcessing(options = {}) {
       `Preprocess batch done (${runtime.modeLabel}): +${successCount} indexed, ${failedCount} failed. Progress ${stats.processedCount}/${stats.totalCount}.`
     );
   } catch (error) {
-    showCloudMessage(`LLM preprocessing failed: ${formatCloudError(error)}`, true);
+    showCloudMessage(`LLM preprocessing failed: ${formatProviderError(error, "LLM")}`, true);
   } finally {
     searchEnhancementRunState = null;
     searchEnhancementBusy = false;
@@ -4549,10 +4850,64 @@ async function saveCloudSettings() {
 
 async function signInToCloud() {
   await runCloudAction(async () => {
-    await signInCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value);
-    deck = await syncDeckWithCloud();
+    showCloudMessage(`Starting Supabase sign-in. Build ${UI_BUILD_LABEL}.`);
+    let signedInUser;
+    try {
+      signedInUser = await withActionTimeout(
+        signInCloud(elements.cloudEmailInput.value.trim(), elements.cloudPasswordInput.value),
+        "Supabase sign-in",
+        20000
+      );
+    } catch (error) {
+      throw await withSupabaseSignInHint(error);
+    }
+    showCloudMessage(`Supabase sign-in returned user ${signedInUser.email || signedInUser.id}. Checking session.`);
+    const currentUser = await withActionTimeout(getCloudUser(), "Supabase session check", 10000);
+    if (!currentUser?.id) {
+      throw new Error("Supabase sign-in returned a user, but this Chrome extension profile did not persist the session.");
+    }
+    showCloudMessage("Supabase session confirmed. Syncing deck.");
+    deck = await withActionTimeout(syncDeckWithCloud(), "Supabase deck sync", 30000);
+    const syncedUser = await withActionTimeout(getCloudUser(), "post-sync session check", 10000);
+    if (!syncedUser?.id) {
+      throw new Error("Supabase session was available after sign-in, but was lost during sync.");
+    }
     elements.cloudPasswordInput.value = "";
-    return "Signed in and synced.";
+    return `Signed in and synced as ${signedInUser.email || signedInUser.id}.`;
+  });
+}
+
+async function withSupabaseSignInHint(error) {
+  const message = extractErrorMessage(error);
+  if (!message.includes("Supabase sign-in timed out")) {
+    return error instanceof Error ? error : new Error(message || "Supabase sign-in failed.");
+  }
+
+  try {
+    const config = await getCloudConfig();
+    const key = String(config?.anonKey || "").trim();
+    if (key.startsWith("sb_publishable")) {
+      return new Error(
+        `${message} Current key type looks like sb_publishable. Try Supabase legacy anon JWT key (starts with eyJ...) and retry.`
+      );
+    }
+  } catch {
+    // keep original timeout message
+  }
+
+  return error instanceof Error ? error : new Error(message || "Supabase sign-in failed.");
+}
+
+function withActionTimeout(promise, label, timeoutMs) {
+  let timeoutId = 0;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s.`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    window.clearTimeout(timeoutId);
   });
 }
 
@@ -4739,13 +5094,28 @@ async function sha256Hex(text) {
 
 async function renderAutoSaveControls() {
   const [config, meta] = await Promise.all([getAutoSaveConfig(), getAutoSaveMeta()]);
+  const metaLabel = formatAutoSaveMeta(meta);
 
   elements.autoSaveEnabledToggle.checked = config.enabled;
   elements.autoSaveIntervalSelect.value = String(config.intervalMinutes);
   elements.autoSaveIntervalSelect.disabled = !config.enabled;
-  elements.autoSaveLastCaptured.textContent = `Last auto save: ${
-    meta.lastCapturedAt ? new Date(meta.lastCapturedAt).toLocaleString() : "Never"
-  }`;
+  elements.autoSaveLastCaptured.textContent = `Last capture: ${metaLabel}`;
+}
+
+function formatAutoSaveMeta(meta) {
+  if (!meta?.lastCapturedAt) {
+    return "Never";
+  }
+
+  const timestamp = new Date(meta.lastCapturedAt).toLocaleString();
+  const status = meta.status || "saved";
+  const reason = meta.error || meta.skipReason || meta.lastReason || "";
+  const counts =
+    Number.isFinite(meta.newCount) && Number.isFinite(meta.capturedCount)
+      ? `, +${meta.newCount}/${meta.capturedCount}`
+      : "";
+
+  return `${timestamp} (${status}${reason ? `: ${reason}` : ""}${counts})`;
 }
 
 async function saveAutoSaveControls() {
@@ -4758,8 +5128,30 @@ async function saveAutoSaveControls() {
     [AUTO_SAVE_CONFIG_KEY]: config
   });
 
+  if (config.enabled) {
+    await requestBackgroundAutoSaveCapture("config-save");
+  }
+
   await renderAutoSaveControls();
-  showCloudMessage(config.enabled ? `Background auto-save is on (${config.intervalMinutes} min).` : "Background auto-save is off.");
+  showCloudMessage(
+    config.enabled
+      ? `Background session capture is on (${config.intervalMinutes} min fallback).`
+      : "Background session capture is off."
+  );
+}
+
+async function requestBackgroundAutoSaveCapture(reason) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "tabDeck.captureTabsNow",
+      reason
+    });
+    if (response && response.ok === false) {
+      throw new Error(response.error || "Background capture failed.");
+    }
+  } catch (error) {
+    showCloudMessage(`Background session capture trigger failed: ${extractErrorMessage(error)}`, true);
+  }
 }
 
 async function renderSearchControls() {
@@ -4848,12 +5240,28 @@ async function getAutoSaveMeta() {
 
   if (!meta || typeof meta !== "object") {
     return {
-      lastCapturedAt: ""
+      lastCapturedAt: "",
+      lastReason: "",
+      status: "",
+      skipReason: "",
+      error: "",
+      tabCount: 0,
+      saveableCount: 0,
+      capturedCount: 0,
+      newCount: 0
     };
   }
 
   return {
-    lastCapturedAt: meta.lastCapturedAt || ""
+    lastCapturedAt: meta.lastCapturedAt || "",
+    lastReason: meta.lastReason || "",
+    status: meta.status || "",
+    skipReason: meta.skipReason || "",
+    error: meta.error || "",
+    tabCount: Number.isFinite(meta.tabCount) ? meta.tabCount : 0,
+    saveableCount: Number.isFinite(meta.saveableCount) ? meta.saveableCount : 0,
+    capturedCount: Number.isFinite(meta.capturedCount) ? meta.capturedCount : 0,
+    newCount: Number.isFinite(meta.newCount) ? meta.newCount : 0
   };
 }
 

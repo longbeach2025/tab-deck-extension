@@ -175,11 +175,20 @@ export async function getCloudUser() {
 }
 
 export async function signInCloud(email, password) {
+  const cleanEmail = String(email || "").trim();
+  if (!cleanEmail || !password) {
+    throw new Error("Email and password are required.");
+  }
+
   const supabase = await getRequiredClient();
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
 
   if (error) {
     throw error;
+  }
+
+  if (!data?.session || !data?.user) {
+    throw new Error("Supabase sign-in returned no session. Check email/password and email confirmation status.");
   }
 
   return data.user;
@@ -248,19 +257,20 @@ function extractCloudErrorMessage(error) {
     }
 
     try {
-      return sanitizeCloudErrorText(JSON.stringify(error));
+      const serialized = sanitizeCloudErrorText(JSON.stringify(error));
+      return serialized && serialized !== "{}" ? serialized : "Unknown cloud error object.";
     } catch {
       return "Unknown cloud error object.";
     }
   }
 
-  return sanitizeCloudErrorText(String(error));
+  return sanitizeCloudErrorText(String(error)) || "Unknown cloud error.";
 }
 
 function sanitizeCloudErrorText(value) {
   const text = String(value || "").trim();
 
-  if (!text) {
+  if (!text || text === "{}") {
     return "";
   }
 

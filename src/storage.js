@@ -9,11 +9,15 @@ import {
 } from "./cloud.js";
 
 const STORAGE_KEY = "tabDeckData";
+const SESSION_BUFFER_KEY = "tabDeckSessionBuffer";
+const LOCAL_ONLY_SAVE_META_KEY = "tabDeckLocalOnlySaveMeta";
 const SYNC_META_KEY = "tabDeckSyncMeta";
 const SYNC_CHUNK_PREFIX = "tabDeckSyncChunk_";
 const SYNC_CHUNK_SIZE = 7000;
 const SYNC_SOFT_LIMIT_BYTES = 90000;
 const MAX_TOMBSTONES = 500;
+const SESSION_BUFFER_MAX_RECENT = 1000;
+const SESSION_BUFFER_MAX_WINDOWS = 20;
 const TIME_ACCURACY_LEVEL = {
   imported: 1,
   estimated: 2,
@@ -609,6 +613,227 @@ export async function saveDeck(deck, options = {}) {
   return lastStorageStatus;
 }
 
+export async function loadLocalDeck(options = {}) {
+  const localDeck = await readLocalDeck();
+  if (localDeck) {
+    return localDeck;
+  }
+
+  if (options.createIfMissing === false) {
+    return null;
+  }
+
+  const deck = defaultDeck();
+  await writeLocalDeck(deck);
+  return deck;
+}
+
+// TODO: Wire this into a deliberate local-only save -> explicit Sync now flow after that UX is designed.
+export async function saveDeckLocalOnly(deck, options = {}) {
+  const normalized = normalizeDeck({
+    ...deck,
+    updatedAt: nowIso()
+  });
+  const source = String(options.source || "local-only").trim() || "local-only";
+
+  await writeLocalDeck(normalized);
+  await chrome.storage.local.set({
+    [LOCAL_ONLY_SAVE_META_KEY]: {
+      source,
+      savedAt: nowIso()
+    }
+  });
+  lastStorageStatus = {
+    ...lastStorageStatus,
+    mode: "cloud",
+    synced: false,
+    message: `Saved locally by ${source}; click Sync now to update Supabase.`,
+    pendingLocalChanges: true,
+    lastError: ""
+  };
+  return lastStorageStatus;
+}
+
+export async function loadSessionBuffer() {
+  const result = await chrome.storage.local.get(SESSION_BUFFER_KEY);
+  return normalizeSessionBuffer(result[SESSION_BUFFER_KEY]);
+}
+
+export async function saveSessionBuffer(buffer) {
+  const normalized = normalizeSessionBuffer(buffer);
+  await chrome.storage.local.set({ [SESSION_BUFFER_KEY]: normalized });
+  return normalized;
+}
+
+export async function clearSessionBuffer() {
+  const empty = normalizeSessionBuffer();
+  await chrome.storage.local.set({ [SESSION_BUFFER_KEY]: empty });
+  return empty;
+}
+
+export async function removeSessionBufferUrls(urls) {
+  const urlSet = new Set((Array.isArray(urls) ? urls : []).map((url) => String(url || "").trim()).filter(Boolean));
+  if (urlSet.size === 0) {
+    return loadSessionBuffer();
+  }
+
+  const existing = await loadSessionBuffer();
+  return saveSessionBuffer({
+    ...existing,
+    recent: existing.recent.filter((entry) => !urlSet.has(entry.url)),
+    windows: existing.windows
+      .map((window) => ({
+        ...window,
+        tabs: window.tabs.filter((entry) => !urlSet.has(entry.url))
+      }))
+      .filter((window) => window.tabs.length > 0)
+  });
+}
+
+export async function captureTabsToSessionBuffer(tabs, options = {}) {
+  const now = nowIso();
+  const reason = String(options.reason || "capture").trim() || "capture";
+  const rawTabs = Array.isArray(tabs) ? tabs : [];
+  const saveableTabs = rawTabs.filter((tab) => tab && isSaveableUrl(tab.url));
+  const existing = await loadSessionBuffer();
+  const recentByUrl = new Map(existing.recent.map((entry) => [entry.url, entry]));
+  const windowsById = new Map();
+  let inserted = 0;
+  let updated = 0;
+
+  for (const tab of saveableTabs) {
+    const url = String(tab.url || "").trim();
+    if (!url) {
+      continue;
+    }
+
+    const previous = recentByUrl.get(url);
+    if (previous) {
+      updated += 1;
+    } else {
+      inserted += 1;
+    }
+    const entry = normalizeSessionTab({
+      ...previous,
+      url,
+      title: tab.title || previous?.title || url,
+      favIconUrl: compactFavIconUrl(tab.favIconUrl || previous?.favIconUrl || ""),
+      windowId: Number.isFinite(tab.windowId) ? tab.windowId : previous?.windowId || 0,
+      tabId: Number.isFinite(tab.id) ? tab.id : previous?.tabId || 0,
+      index: Number.isFinite(tab.index) ? tab.index : previous?.index || 0,
+      active: Boolean(tab.active),
+      firstSeenAt: previous?.firstSeenAt || now,
+      lastSeenAt: now,
+      seenCount: Number(previous?.seenCount || 0) + 1
+    });
+    recentByUrl.set(url, entry);
+
+    const windowId = entry.windowId || 0;
+    if (!windowsById.has(windowId)) {
+      windowsById.set(windowId, {
+        windowId,
+        focused: Boolean(tab.highlighted || tab.active),
+        lastSeenAt: now,
+        tabs: []
+      });
+    }
+    windowsById.get(windowId).tabs.push(entry);
+  }
+
+  const recent = Array.from(recentByUrl.values())
+    .sort((a, b) => parseTimestamp(b.lastSeenAt) - parseTimestamp(a.lastSeenAt))
+    .slice(0, SESSION_BUFFER_MAX_RECENT);
+  const windows = Array.from(windowsById.values())
+    .map((window) => ({
+      ...window,
+      tabs: window.tabs.sort((a, b) => a.index - b.index)
+    }))
+    .sort((a, b) => parseTimestamp(b.lastSeenAt) - parseTimestamp(a.lastSeenAt))
+    .slice(0, SESSION_BUFFER_MAX_WINDOWS);
+
+  const savedBuffer = await saveSessionBuffer({
+    version: 1,
+    updatedAt: now,
+    windows,
+    recent,
+    meta: {
+      lastCapturedAt: now,
+      lastReason: reason,
+      lastStatus: "saved",
+      tabCount: rawTabs.length,
+      saveableCount: saveableTabs.length,
+      capturedCount: saveableTabs.length,
+      error: ""
+    }
+  });
+
+  return {
+    ...savedBuffer,
+    inserted,
+    updated
+  };
+}
+
+function normalizeSessionBuffer(buffer = {}) {
+  const source = buffer && typeof buffer === "object" ? buffer : {};
+  const recent = Array.isArray(source.recent)
+    ? source.recent.map(normalizeSessionTab).filter((tab) => tab.url).slice(0, SESSION_BUFFER_MAX_RECENT)
+    : [];
+  const windows = Array.isArray(source.windows)
+    ? source.windows
+        .filter((window) => window && typeof window === "object")
+        .map((window) => ({
+          windowId: Number.isFinite(window.windowId) ? window.windowId : 0,
+          focused: Boolean(window.focused),
+          lastSeenAt: window.lastSeenAt || "",
+          tabs: Array.isArray(window.tabs)
+            ? window.tabs.map(normalizeSessionTab).filter((tab) => tab.url)
+            : []
+        }))
+        .filter((window) => window.tabs.length > 0)
+        .slice(0, SESSION_BUFFER_MAX_WINDOWS)
+    : [];
+  const meta = source.meta && typeof source.meta === "object" ? source.meta : {};
+
+  return {
+    version: 1,
+    updatedAt: source.updatedAt || "",
+    windows,
+    recent,
+    meta: {
+      lastCapturedAt: meta.lastCapturedAt || "",
+      lastReason: meta.lastReason || "",
+      lastStatus: meta.lastStatus || "",
+      tabCount: Number.isFinite(meta.tabCount) ? meta.tabCount : 0,
+      saveableCount: Number.isFinite(meta.saveableCount) ? meta.saveableCount : 0,
+      capturedCount: Number.isFinite(meta.capturedCount) ? meta.capturedCount : 0,
+      error: meta.error || ""
+    }
+  };
+}
+
+function normalizeSessionTab(tab = {}) {
+  const source = tab && typeof tab === "object" ? tab : {};
+  const url = String(source.url || "").trim();
+  return {
+    url,
+    title: source.title || url,
+    favIconUrl: compactFavIconUrl(source.favIconUrl || ""),
+    windowId: Number.isFinite(source.windowId) ? source.windowId : 0,
+    tabId: Number.isFinite(source.tabId) ? source.tabId : 0,
+    index: Number.isFinite(source.index) ? source.index : 0,
+    active: Boolean(source.active),
+    firstSeenAt: source.firstSeenAt || source.lastSeenAt || nowIso(),
+    lastSeenAt: source.lastSeenAt || source.firstSeenAt || nowIso(),
+    seenCount: Number.isFinite(source.seenCount) ? source.seenCount : 1
+  };
+}
+
+function parseTimestamp(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 async function readLocalDeck() {
   const result = await chrome.storage.local.get(STORAGE_KEY);
   return result[STORAGE_KEY] ? normalizeDeck(result[STORAGE_KEY]) : null;
@@ -713,6 +938,27 @@ function setSyncStatus(message) {
 
 export function getStorageStatus() {
   return lastStorageStatus;
+}
+
+export function markLocalPending(source = "local-only") {
+  const label = String(source || "local-only").trim() || "local-only";
+  lastStorageStatus = {
+    ...lastStorageStatus,
+    mode: "cloud",
+    synced: false,
+    message: `Saved locally by ${label}; click Sync now to update Supabase.`,
+    pendingLocalChanges: true,
+    lastError: ""
+  };
+  return lastStorageStatus;
+}
+
+export function isLocalOnlySaveMetaChange(areaName, changes) {
+  return areaName === "local" && Boolean(changes?.[LOCAL_ONLY_SAVE_META_KEY]);
+}
+
+export function isSessionBufferChange(areaName, changes) {
+  return areaName === "local" && Boolean(changes?.[SESSION_BUFFER_KEY]);
 }
 
 export function isDeckStorageChange(areaName, changes) {

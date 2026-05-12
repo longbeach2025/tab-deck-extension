@@ -179,21 +179,27 @@
 
       <div class="side-section auto-save-section">
         <div class="section-title">
-          <span>Silent Auto Save</span>
+          <span>Recent Captures</span>
         </div>
         <div class="auto-save-config">
           <label class="check-row">
             <input id="autoSaveEnabledToggle" type="checkbox">
-            <span>Enable background auto-save</span>
+            <span>Enable background session capture</span>
           </label>
-          <label class="field-label auto-save-label" for="autoSaveIntervalSelect">Save frequency</label>
+          <label class="field-label auto-save-label" for="autoSaveIntervalSelect">Capture fallback</label>
           <select id="autoSaveIntervalSelect">
             <option value="3">Every 3 minutes</option>
             <option value="5">Every 5 minutes</option>
             <option value="10">Every 10 minutes</option>
             <option value="15">Every 15 minutes</option>
           </select>
-          <p id="autoSaveLastCaptured" class="cloud-meta">Last auto save: Never</p>
+          <p id="autoSaveLastCaptured" class="cloud-meta">Last capture: Never</p>
+          <div class="quick-actions">
+            <button id="saveSelectedBufferButton" class="primary-button">Save selected</button>
+            <button id="saveAllBufferButton" class="secondary-button">Save all</button>
+          </div>
+          <button id="clearSessionBufferButton" class="ghost-button">Clear captures</button>
+          <div id="sessionBufferList" class="live-tabs"></div>
         </div>
       </div>
 
