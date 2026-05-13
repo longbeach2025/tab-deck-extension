@@ -42,8 +42,8 @@ function bindEvents() {
     elements.collectionSelect.disabled = Boolean(elements.collectionName.value.trim());
   });
 
-  elements.saveTabButton.addEventListener("click", saveCurrentTab);
-  elements.saveWindowButton.addEventListener("click", saveCurrentWindow);
+  elements.saveTabButton.addEventListener("click", () => saveCurrentTab(elements.saveTabButton));
+  elements.saveWindowButton.addEventListener("click", () => saveCurrentWindow(elements.saveWindowButton));
   elements.openDeckButton.addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("newtab.html") }));
 }
 
@@ -89,7 +89,7 @@ function renderCollections() {
   }
 }
 
-async function saveCurrentTab() {
+async function saveCurrentTab(sourceButton = null) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!tab || !isSaveableUrl(tab.url)) {
@@ -97,10 +97,10 @@ async function saveCurrentTab() {
     return;
   }
 
-  await saveTabs([tab]);
+  await saveTabs([tab], sourceButton);
 }
 
-async function saveCurrentWindow() {
+async function saveCurrentWindow(sourceButton = null) {
   const tabs = await chrome.tabs.query({ currentWindow: true });
   const extensionRoot = chrome.runtime.getURL("");
   const saveableTabs = tabs.filter((tab) => isSaveableUrl(tab.url) && !tab.url.startsWith(extensionRoot));
@@ -110,10 +110,10 @@ async function saveCurrentWindow() {
     return;
   }
 
-  await saveTabs(saveableTabs);
+  await saveTabs(saveableTabs, sourceButton);
 }
 
-async function saveTabs(tabs) {
+async function saveTabs(tabs, sourceButton = null) {
   const collection = getTargetCollection();
   const existingUrls = new Set(collection.items.map((item) => item.url));
   const items = tabs.filter((tab) => !existingUrls.has(tab.url)).map(tabToItem);
@@ -130,6 +130,7 @@ async function saveTabs(tabs) {
   elements.collectionSelect.disabled = false;
   render();
   setStatus(status.synced ? `${items.length} saved and synced.` : `${items.length} saved locally. Sync needs attention.`);
+  flashButtonSuccess(sourceButton);
 }
 
 function getTargetCollection() {
@@ -155,4 +156,17 @@ function getTargetCollection() {
 
 function setStatus(message) {
   elements.status.textContent = message;
+}
+
+function flashButtonSuccess(buttonElement) {
+  if (!buttonElement || !(buttonElement instanceof HTMLElement)) {
+    return;
+  }
+
+  buttonElement.classList.remove("button-success-flash");
+  void buttonElement.offsetWidth;
+  buttonElement.classList.add("button-success-flash");
+  setTimeout(() => {
+    buttonElement.classList.remove("button-success-flash");
+  }, 700);
 }

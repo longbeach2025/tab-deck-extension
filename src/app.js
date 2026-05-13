@@ -652,6 +652,7 @@ async function saveAiConfig() {
   vectorItemEmbeddingCache.clear();
   await renderAiControls();
   showCloudMessage("LLM + embedding config saved.");
+  flashButtonSuccess(elements.saveAiConfigButton);
   scheduleLlmSmartSearchRefresh(true);
 }
 
@@ -3519,21 +3520,21 @@ function getDeletedEntryTitle(entry) {
 
 async function saveSelectedTabs() {
   const tabs = liveTabs.filter((tab) => selectedTabIds.has(tab.id));
-  await saveTabsFlow(tabs);
+  await saveTabsFlow(tabs, elements.saveSelectedButton);
 }
 
 async function saveAllTabs() {
-  await saveTabsFlow(liveTabs);
+  await saveTabsFlow(liveTabs, elements.saveAllButton);
 }
 
 async function saveSelectedSessionBufferTabs() {
   const entries = getSelectedSessionBufferEntries();
-  await saveSessionBufferTabsFlow(entries);
+  await saveSessionBufferTabsFlow(entries, elements.saveSelectedBufferButton);
 }
 
 async function saveAllSessionBufferTabs() {
   const entries = Array.isArray(sessionBuffer?.recent) ? sessionBuffer.recent : [];
-  await saveSessionBufferTabsFlow(entries);
+  await saveSessionBufferTabsFlow(entries, elements.saveAllBufferButton);
 }
 
 function getSelectedSessionBufferEntries() {
@@ -3559,7 +3560,7 @@ async function clearSessionBufferFlow() {
   showCloudMessage("Recent captures cleared.");
 }
 
-async function saveTabsFlow(tabs) {
+async function saveTabsFlow(tabs, sourceButton = null) {
   if (tabs.length === 0) {
     return;
   }
@@ -3578,9 +3579,10 @@ async function saveTabsFlow(tabs) {
   const savedCount = await addTabsToCollection(tabs, collection, { closeAfterSave: elements.closeAfterSave.checked });
   const status = getStorageStatus();
   showCloudMessage(`Saved ${savedCount} tabs to "${collection.name}". ${status.message}`, !status.synced);
+  flashButtonSuccess(sourceButton);
 }
 
-async function saveSessionBufferTabsFlow(tabs) {
+async function saveSessionBufferTabsFlow(tabs, sourceButton = null) {
   if (tabs.length === 0) {
     return;
   }
@@ -3594,6 +3596,7 @@ async function saveSessionBufferTabsFlow(tabs) {
   renderSessionBuffer();
   const status = getStorageStatus();
   showCloudMessage(`Saved ${savedCount} recent captures to "${collection.name}". ${status.message}`, !status.synced);
+  flashButtonSuccess(sourceButton);
 }
 
 function getOrCreateAutoSavedCollection() {
@@ -4845,7 +4848,7 @@ async function saveCloudSettings() {
     });
     deck = await loadDeck();
     return "Supabase config saved. Sign in to sync.";
-  });
+  }, elements.saveCloudConfigButton);
 }
 
 async function signInToCloud() {
@@ -4874,7 +4877,7 @@ async function signInToCloud() {
     }
     elements.cloudPasswordInput.value = "";
     return `Signed in and synced as ${signedInUser.email || signedInUser.id}.`;
-  });
+  }, elements.signInCloudButton);
 }
 
 async function withSupabaseSignInHint(error) {
@@ -4922,7 +4925,7 @@ async function signUpForCloud() {
     }
 
     return "Account created. Check your email to confirm, then sign in.";
-  });
+  }, elements.signUpCloudButton);
 }
 
 async function signOutOfCloud() {
@@ -4930,14 +4933,14 @@ async function signOutOfCloud() {
     await signOutCloud();
     deck = await loadDeck();
     return "Signed out. Sign in to resume Supabase sync.";
-  });
+  }, elements.signOutCloudButton);
 }
 
 async function syncNow() {
   await runCloudAction(async () => {
     deck = await syncDeckWithCloud();
     return "Synced with Supabase.";
-  });
+  }, elements.syncNowButton);
 }
 
 async function exportDeckBackup() {
@@ -5010,7 +5013,7 @@ async function importPrivateInitBundleFromFile(event) {
   });
 }
 
-async function runCloudAction(action) {
+async function runCloudAction(action, sourceButton = null) {
   setCloudBusy(true);
   elements.systemActionStatus.classList.add("loading");
   let finalMessage = "";
@@ -5031,7 +5034,24 @@ async function runCloudAction(action) {
     if (finalMessage) {
       showCloudMessage(finalMessage, isWarning);
     }
+
+    if (!isWarning) {
+      flashButtonSuccess(sourceButton);
+    }
   }
+}
+
+function flashButtonSuccess(buttonElement) {
+  if (!buttonElement || !(buttonElement instanceof HTMLElement)) {
+    return;
+  }
+
+  buttonElement.classList.remove("button-success-flash");
+  void buttonElement.offsetWidth;
+  buttonElement.classList.add("button-success-flash");
+  setTimeout(() => {
+    buttonElement.classList.remove("button-success-flash");
+  }, 700);
 }
 
 function showCloudMessage(message, isWarning = false) {
