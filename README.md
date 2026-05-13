@@ -11,17 +11,21 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.27`
+- 开发版：`v0.2.0-alpha.28`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.27` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.27/tab-deck-extension-v0.2.0-alpha.27.zip)
+- [`v0.2.0-alpha.28` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.28/tab-deck-extension-v0.2.0-alpha.28.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.27`）
+## 核心功能（截至 `v0.2.0-alpha.28`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
+- Recent Captures：
+  - 后台周期性捕获当前打开的 tab，写入本地 session buffer，不再静默写入正式 collection。
+  - 侧栏 `Recent Captures` 可选择 captured tabs，并通过 `Save selected / Save all` 显式提升到 `Auto Saved` collection。
+  - 提升成功后会从 Recent Captures buffer 中移除对应 URL，避免 reload 后重复出现。
 - Space / Collection / Link 三级组织结构。
 - 标题、URL、域名、集合名、备注搜索（支持自然语言查询转过滤条件）。
 - 一键打开集合中的全部链接。
@@ -34,8 +38,11 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 - 数据安全：
   - JSON 导出备份。
   - JSON 导入恢复（支持 Tab Deck 备份 + Toby 导出 JSON）。
+  - 同步前防御性检查重复 link ID，避免 Supabase `ON CONFLICT` 21000 类错误。
+  - 对可疑 bulk delete 设置阈值保护，降低异常本地状态误删云端数据的风险。
 - 状态可视化：
   - 当前登录账号、最近同步时间、待同步本地变更、错误详情。
+  - 登录流程按阶段显示进度，并设置超时边界，避免 Supabase/Auth 异常时无限等待。
 - 时间可追溯：
   - link 记录 `addedAt / lastModifiedAt / lastOpenedAt`。
   - Toby 导入数据标记时间来源（`Imported time`），避免误认为原始创建时间。
@@ -106,7 +113,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.27`。
+2. 安装 `v0.2.0-alpha.28`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -358,6 +365,27 @@ alter table public.tab_deck_links
 - 新增可视化进度信息：
   - 展示当前完整跑一次的进度百分比（`processed/total`）。
   - 展示最近一次完整跑完时间（`Last full preprocess`）。
+
+### `v0.2.0-alpha.28` (Recent Captures & Sync Safety)
+
+- Auto-Saved 重构为显式提升流程：
+  - 后台捕获当前打开的 tab 时只写入本地 `tabDeckSessionBuffer`，不再直接写入 collection。
+  - 侧栏 `Recent Captures` 展示最近捕获记录，并支持 `Save selected / Save all`。
+  - 用户显式提升后，captured tabs 会写入默认 `Auto Saved` collection。
+  - 已提升的 URL 会从 Recent Captures buffer 中移除，reload 后不会重复出现。
+- 同步安全增强：
+  - 同步前检测重复 link ID，避免重复 payload 触发 Supabase `ON CONFLICT` 21000 错误。
+  - 增加 cloud bulk delete 阈值保护，阻止异常本地状态一次性软删除大量云端 links。
+  - 保留云端已有 `metadata.preprocess`，避免本地未带 preprocess 的 deck 覆盖云端增强检索数据。
+- 登录诊断增强：
+  - Sign in 流程显示阶段化进度。
+  - Supabase sign-in、session check、deck sync 等步骤增加超时边界。
+  - 登录前检查 email/password，登录后确认 session/user 存在。
+- 已知遗留：
+  - 21000 同步错误的代码层根因尚未锁定，目前使用防御性 dedupe 兜底。
+  - 搜索延迟约 10s 待优化（Phase 5 性能优化已暂停）。
+  - `saveDeckLocalOnly` 路径已实现但未连接到 UI 流程（TODO）。
+  - 详细参考 `CHANGELOG.md`。
 
 ## 构建与打包
 
