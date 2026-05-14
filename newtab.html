@@ -68,12 +68,21 @@
           <span>Status Center</span>
         </div>
         <p id="systemActionStatus" class="cloud-status">Ready.</p>
-        <p id="cloudStatus" class="cloud-meta">Sync status: Checking cloud status</p>
-        <p id="cloudMode" class="cloud-meta">Backend: Chrome sync</p>
-        <p id="cloudSignedIn" class="cloud-meta">Signed in as: Not signed in</p>
-        <p id="cloudLastSynced" class="cloud-meta">Last synced: Never</p>
-        <p id="cloudPending" class="cloud-meta">Pending local changes: No</p>
-        <p id="cloudErrorDetails" class="cloud-meta warning hidden">Cloud error details: None</p>
+        <div id="cloudStatusSummary" class="cloud-status-summary">
+          <span class="status-dot" data-state="info"></span>
+          <span class="status-summary-text">Loading status...</span>
+        </div>
+        <details id="cloudStatusDetails" class="cloud-status-details">
+          <summary>Details</summary>
+          <div class="cloud-details-body">
+            <p id="cloudStatus" class="cloud-meta">Sync status: Checking cloud status</p>
+            <p id="cloudMode" class="cloud-meta">Backend: Chrome sync</p>
+            <p id="cloudSignedIn" class="cloud-meta">Signed in as: Not signed in</p>
+            <p id="cloudLastSynced" class="cloud-meta">Last synced: Never</p>
+            <p id="cloudPending" class="cloud-meta">Pending local changes: No</p>
+          </div>
+        </details>
+        <p id="cloudErrorDetails" class="cloud-meta error hidden">Cloud error details: None</p>
       </div>
 
       <div class="side-section cloud-section">

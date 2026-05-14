@@ -90,6 +90,7 @@ let messageTransitionLock = null;
 let messageSequence = 0;
 let syncInProgress = false;
 let syncStartTime = null;
+let statusSummaryRefreshTimer = null;
 let signInClickBound = false;
 
 window.addEventListener("error", (event) => {
@@ -269,6 +270,8 @@ const SEARCH_HOST_ALIASES = {
 const elements = {
   deckStats: document.querySelector("#deckStats"),
   systemActionStatus: document.querySelector("#systemActionStatus"),
+  cloudStatusSummary: document.querySelector("#cloudStatusSummary"),
+  cloudStatusDetails: document.querySelector("#cloudStatusDetails"),
   cloudStatus: document.querySelector("#cloudStatus"),
   cloudUrlInput: document.querySelector("#cloudUrlInput"),
   cloudAnonKeyInput: document.querySelector("#cloudAnonKeyInput"),
@@ -369,6 +372,7 @@ async function init() {
   await loadSearchEnhancementIndex();
   await loadSearchEnhancementMeta();
   renderSearchEnhancementProgress();
+  startStatusSummaryRefresh();
   showCloudMessage(`Ready. Build ${UI_BUILD_LABEL}.`, STATUS_TYPES.INFO, { persistent: true });
 }
 
@@ -627,7 +631,7 @@ async function renderCloudControls() {
   elements.syncNowButton.disabled = !user;
   elements.privateInitSection.classList.toggle("hidden", !canUsePrivateInit);
   elements.importPrivateInitButton.disabled = !canUsePrivateInit;
-  renderCloudDetails();
+  renderCloudDetails(user);
 }
 
 async function renderAiControls() {
@@ -3179,6 +3183,47 @@ function formatDateTimeLabel(value) {
   return new Date(ts).toLocaleString();
 }
 
+function formatRelativeTime(isoString) {
+  if (!isoString) {
+    return null;
+  }
+
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now - date;
+
+  if (Number.isNaN(diffMs) || diffMs < 0) {
+    return null;
+  }
+
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffSec < 60) {
+    return "Just now";
+  }
+
+  if (diffMin < 60) {
+    return `${diffMin} min ago`;
+  }
+
+  if (diffHour < 24) {
+    return `${diffHour} hour${diffHour > 1 ? "s" : ""} ago`;
+  }
+
+  if (diffDay === 1) {
+    return "Yesterday";
+  }
+
+  if (diffDay < 7) {
+    return `${diffDay} days ago`;
+  }
+
+  return date.toLocaleDateString();
+}
+
 function formatDateLabel(value) {
   if (!value) {
     return "Unknown";
@@ -5247,10 +5292,62 @@ async function transitionToLastPersistent(sequenceAtSchedule) {
   await messageTransitionLock;
 }
 
-function renderCloudDetails() {
+function computeStatusSummary(status, user) {
+  if (status?.lastError) {
+    return { state: "error", text: "Cloud error" };
+  }
+
+  if (!user) {
+    return { state: "info", text: "Not signed in" };
+  }
+
+  const userLabel = user.email || user.id || "Signed in";
+
+  if (status?.pendingLocalChanges) {
+    return {
+      state: "warning",
+      text: `Pending changes · ${userLabel}`
+    };
+  }
+
+  if (status?.synced && status?.lastSyncedAt) {
+    const relTime = formatRelativeTime(status.lastSyncedAt);
+    return {
+      state: "success",
+      text: `Synced ${relTime || "recently"} · ${userLabel}`
+    };
+  }
+
+  return { state: "info", text: userLabel };
+}
+
+function renderCloudStatusSummary(status, user) {
+  if (!elements.cloudStatusSummary) {
+    return;
+  }
+
+  const dot = elements.cloudStatusSummary.querySelector(".status-dot");
+  const text = elements.cloudStatusSummary.querySelector(".status-summary-text");
+  const summary = computeStatusSummary(status, user);
+
+  if (dot) {
+    dot.dataset.state = summary.state;
+  }
+
+  if (text) {
+    text.textContent = summary.text;
+  }
+
+  if (elements.cloudStatusDetails && status?.lastError) {
+    elements.cloudStatusDetails.open = true;
+  }
+}
+
+function renderCloudDetails(user = null) {
   const status = getStorageStatus();
   const lastSyncedLabel = status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString() : "Never";
   const backendLabel = status.mode === "cloud" ? "Supabase cloud" : status.mode === "sync" ? "Chrome sync" : "Local only";
+  renderCloudStatusSummary(status, user);
   elements.cloudMode.textContent = `Backend: ${backendLabel}`;
   elements.cloudLastSynced.textContent = `Last synced: ${lastSyncedLabel}`;
   elements.cloudPending.textContent = `Pending local changes: ${status.pendingLocalChanges ? "Yes" : "No"}`;
@@ -5262,6 +5359,23 @@ function renderCloudDetails() {
   } else {
     elements.cloudErrorDetails.textContent = "Cloud error details: None";
     elements.cloudErrorDetails.classList.add("hidden");
+  }
+}
+
+function startStatusSummaryRefresh() {
+  if (statusSummaryRefreshTimer) {
+    return;
+  }
+
+  statusSummaryRefreshTimer = setInterval(() => {
+    void renderCloudControls();
+  }, 60000);
+}
+
+function stopStatusSummaryRefresh() {
+  if (statusSummaryRefreshTimer) {
+    clearInterval(statusSummaryRefreshTimer);
+    statusSummaryRefreshTimer = null;
   }
 }
 

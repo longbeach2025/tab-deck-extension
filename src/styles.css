@@ -405,9 +405,10 @@ textarea {
 }
 
 .cloud-status {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 500;
   line-height: 1.4;
   transition: opacity 0.2s ease;
 }
@@ -425,6 +426,105 @@ textarea {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.cloud-status-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.status-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot[data-state="success"],
+.status-dot[data-state="ok"] {
+  background: var(--status-success);
+  box-shadow: 0 0 6px var(--status-success-bg);
+}
+
+.status-dot[data-state="warning"],
+.status-dot[data-state="pending"] {
+  background: var(--status-warning);
+  box-shadow: 0 0 6px var(--status-warning-bg);
+}
+
+.status-dot[data-state="error"] {
+  background: var(--status-error);
+  box-shadow: 0 0 6px var(--status-error-bg);
+}
+
+.status-dot[data-state="info"],
+.status-dot[data-state="loading"] {
+  background: var(--muted);
+}
+
+.status-summary-text {
+  flex: 1;
+  overflow: hidden;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.cloud-status-details {
+  margin-top: 8px;
+}
+
+.cloud-status-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.cloud-status-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cloud-status-details > summary::before {
+  content: "▸";
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.cloud-status-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.cloud-status-details > summary:hover {
+  color: var(--text);
+}
+
+.cloud-details-body {
+  margin-top: 4px;
+  margin-left: 4px;
+  border-left: 2px solid var(--line);
+  padding: 8px 0 0 14px;
+}
+
+.cloud-details-body .cloud-meta {
+  margin-bottom: 4px;
+}
+
+.cloud-details-body .cloud-meta:last-child {
+  margin-bottom: 0;
 }
 
 .cloud-status.warning {
