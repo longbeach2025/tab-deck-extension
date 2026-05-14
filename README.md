@@ -11,14 +11,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 ## 当前版本
 
 - 稳定版：`v0.1.0`
-- 开发版：`v0.2.0-alpha.28`
+- Beta 版：`v0.2.0-beta.1`
 
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-alpha.28` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-alpha.28/tab-deck-extension-v0.2.0-alpha.28.zip)
+- [`v0.2.0-beta.1` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-beta.1/tab-deck-extension-v0.2.0-beta.1.zip)
 
-## 核心功能（截至 `v0.2.0-alpha.28`）
+## 核心功能（截至 `v0.2.0-beta.1`）
 
 - 替换 Chrome 新标签页为 Tab Deck 工作区。
 - 支持当前窗口标签页的全量/选择性保存。
@@ -41,8 +41,14 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
   - 同步前防御性检查重复 link ID，避免 Supabase `ON CONFLICT` 21000 类错误。
   - 对可疑 bulk delete 设置阈值保护，降低异常本地状态误删云端数据的风险。
 - 状态可视化：
-  - 当前登录账号、最近同步时间、待同步本地变更、错误详情。
-  - 登录流程按阶段显示进度，并设置超时边界，避免 Supabase/Auth 异常时无限等待。
+  - `Status Center` 采用主消息、摘要行、折叠详情三层结构。
+  - 摘要行显示同步状态点、相对同步时间和当前登录账号。
+  - 当前登录账号、最近同步时间、待同步本地变更、错误详情可在 Details 中查看。
+  - 登录/同步流程按阶段显示进度，并设置超时边界，避免 Supabase/Auth 异常时无限等待。
+  - SUCCESS/INFO 状态消息会短暂显示后自动回到持久状态；ERROR/WARNING 会持续显示。
+- 按钮反馈：
+  - hover、active、disabled 状态均有明确视觉反馈。
+  - 异步操作成功后按钮会短暂绿色 pulse。
 - 时间可追溯：
   - link 记录 `addedAt / lastModifiedAt / lastOpenedAt`。
   - Toby 导入数据标记时间来源（`Imported time`），避免误认为原始创建时间。
@@ -70,7 +76,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 
 ### 2) 通过 Release ZIP 安装
 
-1. 下载发布包（建议使用最新 alpha）。
+1. 下载发布包（建议使用最新 beta）。
 2. 解压 ZIP。
 3. 打开 `chrome://extensions`
 4. 开启 `Developer mode`
@@ -113,7 +119,7 @@ alter table public.tab_deck_links
 1. 在 Supabase `Project Settings -> API` 获取：
    - Project URL
    - Publishable key（旧项目界面可能显示为 anon public key）
-2. 安装 `v0.2.0-alpha.28`。
+2. 安装 `v0.2.0-beta.1`。
 3. 在 Tab Deck 新标签页 Cloud Sync 区填写 URL 与 key。
 4. Sign up / Sign in。
 
@@ -142,6 +148,15 @@ alter table public.tab_deck_links
 4. Tab Deck 会自动识别 Toby 格式，并导入为一个新的 Space（不会覆盖现有 Space）。
 
 ## 版本演进记录
+
+### `v0.2.0-beta.1` (Beta Milestone: Complete UI Polish)
+
+- Tab Deck 从 alpha 进入 beta，核心功能已进入面向一般使用的稳定阶段。
+- 完成全部 11 项 UI 改进：
+  - 按钮 hover / active / disabled / success feedback。
+  - Status Center 类型化颜色、pending warning、error details、transient message、sync loading、信息层级重组。
+- `manifest.json` 版本跳到 `0.3.0`，`package.json` 使用 `0.2.0-beta.1`。
+- 已知限制和 beta 阶段目标详见 `CHANGELOG.md`。
 
 ### `v0.1.0`
 
