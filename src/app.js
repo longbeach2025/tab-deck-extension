@@ -74,14 +74,21 @@ const VECTOR_EMBEDDING_MODEL_DEFAULT = "text-embedding-3-small";
 const VECTOR_SEARCH_DEBUG = false;
 const SEARCH_STRATEGY = "dual"; // "legacy" | "dual"
 const UI_BUILD_LABEL = "2026-05-07-auth-diagnostics";
+const STATUS_TYPES = {
+  INFO: "info",
+  SUCCESS: "success",
+  WARNING: "warning",
+  ERROR: "error",
+  LOADING: "loading"
+};
 let signInClickBound = false;
 
 window.addEventListener("error", (event) => {
-  showCloudMessage(`UI error: ${extractErrorMessage(event.error || event.message)}`, true);
+  showCloudMessage(`UI error: ${extractErrorMessage(event.error || event.message)}`, STATUS_TYPES.ERROR);
 });
 
 window.addEventListener("unhandledrejection", (event) => {
-  showCloudMessage(`UI async error: ${extractErrorMessage(event.reason)}`, true);
+  showCloudMessage(`UI async error: ${extractErrorMessage(event.reason)}`, STATUS_TYPES.ERROR);
 });
 const PRIVATE_INIT_OWNER_SALT = "tabdeck-private-init-v1";
 const PRIVATE_INIT_ALLOWED_USER_HASHES = new Set(["8d28328b26f7628a2028865501ec928ce01e6a3ffbbb9e8e7a83813763318d56"]);
@@ -651,7 +658,7 @@ async function saveAiConfig() {
   vectorQueryEmbeddingCache.clear();
   vectorItemEmbeddingCache.clear();
   await renderAiControls();
-  showCloudMessage("LLM + embedding config saved.");
+  showCloudMessage("LLM + embedding config saved.", STATUS_TYPES.SUCCESS);
   flashButtonSuccess(elements.saveAiConfigButton);
   scheduleLlmSmartSearchRefresh(true);
 }
@@ -3557,7 +3564,7 @@ async function clearSessionBufferFlow() {
   selectedSessionUrls.clear();
   renderSessionBuffer();
   await renderAutoSaveControls();
-  showCloudMessage("Recent captures cleared.");
+  showCloudMessage("Recent captures cleared.", STATUS_TYPES.SUCCESS);
 }
 
 async function saveTabsFlow(tabs, sourceButton = null) {
@@ -3578,7 +3585,10 @@ async function saveTabsFlow(tabs, sourceButton = null) {
   clearSearch();
   const savedCount = await addTabsToCollection(tabs, collection, { closeAfterSave: elements.closeAfterSave.checked });
   const status = getStorageStatus();
-  showCloudMessage(`Saved ${savedCount} tabs to "${collection.name}". ${status.message}`, !status.synced);
+  showCloudMessage(
+    `Saved ${savedCount} tabs to "${collection.name}". ${status.message}`,
+    status.synced ? STATUS_TYPES.SUCCESS : STATUS_TYPES.WARNING
+  );
   flashButtonSuccess(sourceButton);
 }
 
@@ -3595,7 +3605,10 @@ async function saveSessionBufferTabsFlow(tabs, sourceButton = null) {
   await refreshSessionBuffer();
   renderSessionBuffer();
   const status = getStorageStatus();
-  showCloudMessage(`Saved ${savedCount} recent captures to "${collection.name}". ${status.message}`, !status.synced);
+  showCloudMessage(
+    `Saved ${savedCount} recent captures to "${collection.name}". ${status.message}`,
+    status.synced ? STATUS_TYPES.SUCCESS : STATUS_TYPES.WARNING
+  );
   flashButtonSuccess(sourceButton);
 }
 
@@ -4327,7 +4340,7 @@ async function runSearchEnhancementProcessing(options = {}) {
   const aiConfig = await getAiConfig();
   if (!aiConfig.apiKey || !aiConfig.baseUrl || !aiConfig.model) {
     if (force) {
-      showCloudMessage("Preprocess needs API Key + Base URL + Model.", true);
+      showCloudMessage("Preprocess needs API Key + Base URL + Model.", STATUS_TYPES.ERROR);
     }
     return;
   }
@@ -4337,7 +4350,10 @@ async function runSearchEnhancementProcessing(options = {}) {
   if (candidates.length === 0) {
     if (force) {
       const stats = getSearchEnhancementStats();
-      showCloudMessage(`LLM preprocessing is up to date (${stats.processedCount}/${stats.totalCount}).`);
+      showCloudMessage(
+        `LLM preprocessing is up to date (${stats.processedCount}/${stats.totalCount}).`,
+        STATUS_TYPES.SUCCESS
+      );
     }
     return;
   }
@@ -4426,7 +4442,7 @@ async function runSearchEnhancementProcessing(options = {}) {
       `Preprocess batch done (${runtime.modeLabel}): +${successCount} indexed, ${failedCount} failed. Progress ${stats.processedCount}/${stats.totalCount}.`
     );
   } catch (error) {
-    showCloudMessage(`LLM preprocessing failed: ${formatProviderError(error, "LLM")}`, true);
+    showCloudMessage(`LLM preprocessing failed: ${formatProviderError(error, "LLM")}`, STATUS_TYPES.ERROR);
   } finally {
     searchEnhancementRunState = null;
     searchEnhancementBusy = false;
@@ -4864,12 +4880,15 @@ async function signInToCloud() {
     } catch (error) {
       throw await withSupabaseSignInHint(error);
     }
-    showCloudMessage(`Supabase sign-in returned user ${signedInUser.email || signedInUser.id}. Checking session.`);
+    showCloudMessage(
+      `Supabase sign-in returned user ${signedInUser.email || signedInUser.id}. Checking session.`,
+      STATUS_TYPES.SUCCESS
+    );
     const currentUser = await withActionTimeout(getCloudUser(), "Supabase session check", 10000);
     if (!currentUser?.id) {
       throw new Error("Supabase sign-in returned a user, but this Chrome extension profile did not persist the session.");
     }
-    showCloudMessage("Supabase session confirmed. Syncing deck.");
+    showCloudMessage("Supabase session confirmed. Syncing deck.", STATUS_TYPES.SUCCESS);
     deck = await withActionTimeout(syncDeckWithCloud(), "Supabase deck sync", 30000);
     const syncedUser = await withActionTimeout(getCloudUser(), "post-sync session check", 10000);
     if (!syncedUser?.id) {
@@ -4953,7 +4972,7 @@ async function exportDeckBackup() {
   link.download = `tab-deck-backup-${timestamp}.json`;
   link.click();
   URL.revokeObjectURL(url);
-  showCloudMessage("Backup exported as JSON.");
+  showCloudMessage("Backup exported as JSON.", STATUS_TYPES.SUCCESS);
 }
 
 async function importDeckBackup(event) {
@@ -5054,13 +5073,22 @@ function flashButtonSuccess(buttonElement) {
   }, 700);
 }
 
-function showCloudMessage(message, isWarning = false) {
+function showCloudMessage(message, type = STATUS_TYPES.INFO) {
+  if (typeof type === "boolean") {
+    type = type ? STATUS_TYPES.WARNING : STATUS_TYPES.INFO;
+  }
+
   const stamp = new Date().toLocaleTimeString();
   elements.systemActionStatus.textContent = `${message} (${stamp})`;
-  elements.systemActionStatus.classList.toggle("warning", isWarning);
-  if (!isWarning) {
+  elements.systemActionStatus.classList.remove("status-info", "status-success", "status-warning", "status-error");
+  elements.systemActionStatus.classList.add(`status-${type}`);
+  if (type !== STATUS_TYPES.LOADING) {
     elements.systemActionStatus.classList.remove("loading");
   }
+  elements.systemActionStatus.classList.toggle(
+    "warning",
+    type === STATUS_TYPES.WARNING || type === STATUS_TYPES.ERROR
+  );
 }
 
 function renderCloudDetails() {
@@ -5170,7 +5198,10 @@ async function requestBackgroundAutoSaveCapture(reason) {
       throw new Error(response.error || "Background capture failed.");
     }
   } catch (error) {
-    showCloudMessage(`Background session capture trigger failed: ${extractErrorMessage(error)}`, true);
+    showCloudMessage(
+      `Background session capture trigger failed: ${extractErrorMessage(error)}`,
+      STATUS_TYPES.ERROR
+    );
   }
 }
 
