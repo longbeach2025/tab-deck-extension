@@ -81,6 +81,13 @@ const STATUS_TYPES = {
   ERROR: "error",
   LOADING: "loading"
 };
+const TRANSIENT_MESSAGE_DURATION_MS = 3000;
+const MESSAGE_FADE_OUT_MS = 300;
+const MESSAGE_FADE_IN_MS = 200;
+let lastPersistentMessage = null;
+let transientTimeoutId = null;
+let messageTransitionLock = null;
+let messageSequence = 0;
 let signInClickBound = false;
 
 window.addEventListener("error", (event) => {
@@ -360,7 +367,7 @@ async function init() {
   await loadSearchEnhancementIndex();
   await loadSearchEnhancementMeta();
   renderSearchEnhancementProgress();
-  showCloudMessage(`Ready. Build ${UI_BUILD_LABEL}.`);
+  showCloudMessage(`Ready. Build ${UI_BUILD_LABEL}.`, STATUS_TYPES.INFO, { persistent: true });
 }
 
 function showMachineBindingGate(error) {
@@ -5073,22 +5080,105 @@ function flashButtonSuccess(buttonElement) {
   }, 700);
 }
 
-function showCloudMessage(message, type = STATUS_TYPES.INFO) {
+async function showCloudMessage(message, type = STATUS_TYPES.INFO, options = {}) {
   if (typeof type === "boolean") {
     type = type ? STATUS_TYPES.WARNING : STATUS_TYPES.INFO;
   }
 
   const stamp = new Date().toLocaleTimeString();
-  elements.systemActionStatus.textContent = `${message} (${stamp})`;
-  elements.systemActionStatus.classList.remove("status-info", "status-success", "status-warning", "status-error");
-  elements.systemActionStatus.classList.add(`status-${type}`);
-  if (type !== STATUS_TYPES.LOADING) {
-    elements.systemActionStatus.classList.remove("loading");
+  const text = `${message} (${stamp})`;
+  const isTransient = type === STATUS_TYPES.SUCCESS || type === STATUS_TYPES.INFO;
+  const duration = options.duration ?? TRANSIENT_MESSAGE_DURATION_MS;
+  const sequence = ++messageSequence;
+
+  if (!isTransient || options.persistent) {
+    lastPersistentMessage = { text, type, stamp };
   }
-  elements.systemActionStatus.classList.toggle(
-    "warning",
-    type === STATUS_TYPES.WARNING || type === STATUS_TYPES.ERROR
-  );
+
+  if (transientTimeoutId) {
+    clearTimeout(transientTimeoutId);
+    transientTimeoutId = null;
+  }
+
+  if (messageTransitionLock) {
+    await messageTransitionLock;
+  }
+
+  if (sequence !== messageSequence) {
+    return;
+  }
+
+  messageTransitionLock = (async () => {
+    await transitionToMessage(text, type);
+    messageTransitionLock = null;
+  })();
+  await messageTransitionLock;
+
+  if (sequence !== messageSequence) {
+    return;
+  }
+
+  if (isTransient && !options.persistent) {
+    transientTimeoutId = setTimeout(() => {
+      transientTimeoutId = null;
+      transitionToLastPersistent(sequence).catch((error) => {
+        console.warn("[Tab Deck] Status message transition failed.", error);
+      });
+    }, duration);
+  }
+}
+
+async function transitionToMessage(text, type) {
+  const el = elements.systemActionStatus;
+  el.classList.remove("is-fading-in");
+  el.classList.add("is-fading-out");
+  await sleep(MESSAGE_FADE_OUT_MS);
+
+  el.textContent = text;
+  el.classList.remove("status-info", "status-success", "status-warning", "status-error");
+  el.classList.add(`status-${type}`);
+  el.classList.toggle("warning", type === STATUS_TYPES.WARNING || type === STATUS_TYPES.ERROR);
+  if (type !== STATUS_TYPES.LOADING) {
+    el.classList.remove("loading");
+  }
+
+  el.classList.remove("is-fading-out");
+  el.classList.add("is-fading-in");
+  await sleep(MESSAGE_FADE_IN_MS);
+  el.classList.remove("is-fading-in");
+}
+
+async function transitionToLastPersistent(sequenceAtSchedule) {
+  if (sequenceAtSchedule !== messageSequence) {
+    return;
+  }
+
+  if (messageTransitionLock) {
+    await messageTransitionLock;
+  }
+
+  if (sequenceAtSchedule !== messageSequence) {
+    return;
+  }
+
+  messageTransitionLock = (async () => {
+    if (!lastPersistentMessage) {
+      const el = elements.systemActionStatus;
+      el.classList.remove("is-fading-in");
+      el.classList.add("is-fading-out");
+      await sleep(MESSAGE_FADE_OUT_MS);
+      if (sequenceAtSchedule === messageSequence) {
+        el.textContent = "";
+        el.classList.remove("is-fading-out");
+      }
+      messageTransitionLock = null;
+      return;
+    }
+
+    await transitionToMessage(lastPersistentMessage.text, lastPersistentMessage.type);
+    messageTransitionLock = null;
+  })();
+  await messageTransitionLock;
 }
 
 function renderCloudDetails() {

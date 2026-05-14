@@ -409,6 +409,16 @@ textarea {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
+  transition: opacity 0.2s ease;
+}
+
+.cloud-status.is-fading-out {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.cloud-status.is-fading-in {
+  opacity: 1;
 }
 
 .cloud-meta {
