@@ -88,6 +88,8 @@ let lastPersistentMessage = null;
 let transientTimeoutId = null;
 let messageTransitionLock = null;
 let messageSequence = 0;
+let syncInProgress = false;
+let syncStartTime = null;
 let signInClickBound = false;
 
 window.addEventListener("error", (event) => {
@@ -4903,7 +4905,10 @@ async function signInToCloud() {
     }
     elements.cloudPasswordInput.value = "";
     return `Signed in and synced as ${signedInUser.email || signedInUser.id}.`;
-  }, elements.signInCloudButton);
+  }, elements.signInCloudButton, {
+    syncMode: true,
+    syncMessage: "Signing in and syncing..."
+  });
 }
 
 async function withSupabaseSignInHint(error) {
@@ -4951,7 +4956,10 @@ async function signUpForCloud() {
     }
 
     return "Account created. Check your email to confirm, then sign in.";
-  }, elements.signUpCloudButton);
+  }, elements.signUpCloudButton, {
+    syncMode: true,
+    syncMessage: "Signing up and syncing..."
+  });
 }
 
 async function signOutOfCloud() {
@@ -4966,7 +4974,10 @@ async function syncNow() {
   await runCloudAction(async () => {
     deck = await syncDeckWithCloud();
     return "Synced with Supabase.";
-  }, elements.syncNowButton);
+  }, elements.syncNowButton, {
+    syncMode: true,
+    syncMessage: "Syncing with cloud..."
+  });
 }
 
 async function exportDeckBackup() {
@@ -5036,35 +5047,83 @@ async function importPrivateInitBundleFromFile(event) {
     const result = await importInitBundleToCloud(bundle, { setActiveSpace: true });
     deck = await syncDeckWithCloud();
     return `Private init imported: ${result.spaces} spaces, ${result.collections} collections, ${result.links} links.`;
+  }, null, {
+    syncMode: true,
+    syncMessage: "Importing private init bundle..."
   });
 }
 
-async function runCloudAction(action, sourceButton = null) {
+async function runCloudAction(action, sourceButton = null, options = {}) {
   setCloudBusy(true);
-  elements.systemActionStatus.classList.add("loading");
+  if (options.syncMode) {
+    await beginSyncIndicator(options.syncMessage || "Syncing with cloud...");
+  } else {
+    elements.systemActionStatus.classList.add("loading");
+  }
   let finalMessage = "";
   let isWarning = false;
+  let resultType = STATUS_TYPES.SUCCESS;
 
   try {
-    const message = await action();
+    const result = await action();
     render();
-    finalMessage = message || "";
+    finalMessage = typeof result === "string" ? result : result?.message || "Done.";
+    resultType = result?.type || STATUS_TYPES.SUCCESS;
   } catch (error) {
     finalMessage = formatCloudError(error);
     isWarning = true;
+    resultType = STATUS_TYPES.ERROR;
   } finally {
     setCloudBusy(false);
-    elements.systemActionStatus.classList.remove("loading");
     await renderCloudControls();
 
-    if (finalMessage) {
-      showCloudMessage(finalMessage, isWarning);
+    if (options.syncMode) {
+      await endSyncIndicator(finalMessage, isWarning ? STATUS_TYPES.ERROR : resultType, { showDuration: true });
+    } else {
+      elements.systemActionStatus.classList.remove("loading");
+      if (finalMessage) {
+        await showCloudMessage(finalMessage, isWarning);
+      }
     }
 
-    if (!isWarning) {
+    if (!isWarning && sourceButton) {
       flashButtonSuccess(sourceButton);
     }
   }
+}
+
+function isSyncInProgress() {
+  return syncInProgress;
+}
+
+function getSyncDuration() {
+  return syncStartTime ? Date.now() - syncStartTime : 0;
+}
+
+async function beginSyncIndicator(message = "Syncing with cloud...") {
+  syncInProgress = true;
+  syncStartTime = Date.now();
+  await showCloudMessage(message, STATUS_TYPES.LOADING);
+  if (elements.syncNowButton) {
+    elements.syncNowButton.classList.add("is-loading");
+  }
+}
+
+async function endSyncIndicator(finalMessage, type = STATUS_TYPES.SUCCESS, options = {}) {
+  const duration = getSyncDuration();
+  syncInProgress = false;
+  syncStartTime = null;
+
+  if (elements.syncNowButton) {
+    elements.syncNowButton.classList.remove("is-loading");
+  }
+
+  let displayMessage = finalMessage;
+  if (options.showDuration && duration > 1000) {
+    displayMessage = `${finalMessage} (${(duration / 1000).toFixed(1)}s)`;
+  }
+
+  await showCloudMessage(displayMessage, type);
 }
 
 function flashButtonSuccess(buttonElement) {
@@ -5085,13 +5144,18 @@ async function showCloudMessage(message, type = STATUS_TYPES.INFO, options = {})
     type = type ? STATUS_TYPES.WARNING : STATUS_TYPES.INFO;
   }
 
+  const isLoading = type === STATUS_TYPES.LOADING;
+  const isTransient = type === STATUS_TYPES.SUCCESS || type === STATUS_TYPES.INFO;
+  if (syncInProgress && isTransient && !options.persistent && !options.allowDuringSync) {
+    return;
+  }
+
   const stamp = new Date().toLocaleTimeString();
   const text = `${message} (${stamp})`;
-  const isTransient = type === STATUS_TYPES.SUCCESS || type === STATUS_TYPES.INFO;
   const duration = options.duration ?? TRANSIENT_MESSAGE_DURATION_MS;
   const sequence = ++messageSequence;
 
-  if (!isTransient || options.persistent) {
+  if ((!isTransient && !isLoading) || options.persistent) {
     lastPersistentMessage = { text, type, stamp };
   }
 
@@ -5118,7 +5182,7 @@ async function showCloudMessage(message, type = STATUS_TYPES.INFO, options = {})
     return;
   }
 
-  if (isTransient && !options.persistent) {
+  if (isTransient && !isLoading && !options.persistent) {
     transientTimeoutId = setTimeout(() => {
       transientTimeoutId = null;
       transitionToLastPersistent(sequence).catch((error) => {
@@ -5135,10 +5199,12 @@ async function transitionToMessage(text, type) {
   await sleep(MESSAGE_FADE_OUT_MS);
 
   el.textContent = text;
-  el.classList.remove("status-info", "status-success", "status-warning", "status-error");
+  el.classList.remove("status-info", "status-success", "status-warning", "status-error", "status-loading");
   el.classList.add(`status-${type}`);
   el.classList.toggle("warning", type === STATUS_TYPES.WARNING || type === STATUS_TYPES.ERROR);
-  if (type !== STATUS_TYPES.LOADING) {
+  if (type === STATUS_TYPES.LOADING) {
+    el.classList.add("loading");
+  } else {
     el.classList.remove("loading");
   }
 

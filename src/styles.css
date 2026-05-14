@@ -448,6 +448,10 @@ textarea {
   color: var(--muted);
 }
 
+.cloud-status.status-loading {
+  color: var(--accent);
+}
+
 .cloud-status.loading::before {
   content: "";
   display: inline-block;
@@ -596,6 +600,34 @@ textarea {
 
 .icon-button.loading {
   opacity: 0.8;
+}
+
+.icon-button.is-loading,
+button.is-loading {
+  position: relative;
+  pointer-events: none;
+  opacity: 0.7;
+  color: transparent;
+}
+
+.icon-button.is-loading::after,
+button.is-loading::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.icon-button.is-loading > *,
+button.is-loading > * {
+  visibility: hidden;
 }
 
 .primary-button.button-success-flash,
