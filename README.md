@@ -8,6 +8,19 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 2. 支持多设备同步（先 Chrome Sync，后 Supabase 云同步）。
 3. 在同步链路不稳定时优先保证数据不丢（本地 fallback + 可导入导出备份）。
 
+## Installation (Beta)
+
+Tab Deck is now available as a beta release for public installation.
+
+1. Download the latest zip from [Releases](https://github.com/longbeach2025/tab-deck-extension/releases/latest)
+2. Unzip the downloaded file
+3. Open `chrome://extensions/` in Chrome
+4. Enable "Developer mode" (toggle top right)
+5. Click "Load unpacked"
+6. Select the unzipped folder
+
+Sign in or sign up with email to start using Tab Deck. Email verification is required.
+
 ## 当前版本
 
 - 稳定版：`v0.1.0`
@@ -16,7 +29,7 @@ Tab Deck 是一个从零实现的 Chrome 标签页管理扩展，灵感来自 To
 下载链接：
 
 - [`v0.1.0` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.1.0/tab-deck-extension-v0.1.0.zip)
-- [`v0.2.0-beta.1` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/download/v0.2.0-beta.1/tab-deck-extension-v0.2.0-beta.1.zip)
+- [`v0.2.0-beta.1` ZIP](https://github.com/longbeach2025/tab-deck-extension/releases/latest)
 
 ## 核心功能（截至 `v0.2.0-beta.1`）
 
